@@ -3,6 +3,7 @@
 
 [![Python 3.12](https://img.shields.io/badge/Python-3.12%2B-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-blueviolet.svg?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/PyTest-126%2F126%20Passed%20(100%25)-success.svg?logo=pytest&logoColor=white)](tests/)
 [![Coverage](https://img.shields.io/badge/Coverage-95%25-brightgreen.svg)](screenshots/test_coverage_report.png)
 [![Throughput](https://img.shields.io/badge/Locust%20Load-1%2C023.8%20RPS-orange.svg)](screenshots/locust_load_test_report.png)
