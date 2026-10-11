@@ -12,6 +12,7 @@ from app.domain.value_objects import Currency, Money
 from app.infrastructure.persistence.postgres.models import AccountModel, TransactionModel
 from app.infrastructure.persistence.postgres.repositories import (
     PostgresAccountRepository,
+    PostgresIdempotencyRepository,
     PostgresLedgerRepository,
 )
 
@@ -29,6 +30,7 @@ class PostgresUnitOfWork:
         self.session: AsyncSession | None = None
         self._accounts: PostgresAccountRepository | None = None
         self._ledger: PostgresLedgerRepository | None = None
+        self._idempotency: PostgresIdempotencyRepository | None = None
         self._committed: bool = False
 
     async def __aenter__(self) -> Self:
@@ -37,6 +39,7 @@ class PostgresUnitOfWork:
         await self.session.begin()
         self._accounts = PostgresAccountRepository(self.session)
         self._ledger = PostgresLedgerRepository(self.session)
+        self._idempotency = PostgresIdempotencyRepository(self.session)
         self._committed = False
         return self
 
@@ -61,6 +64,7 @@ class PostgresUnitOfWork:
             self.session = None
             self._accounts = None
             self._ledger = None
+            self._idempotency = None
 
     @property
     def accounts(self) -> PostgresAccountRepository:
@@ -75,6 +79,13 @@ class PostgresUnitOfWork:
         if self._ledger is None:
             raise RuntimeError("PostgresUnitOfWork session is not active. Use 'async with uow:'.")
         return self._ledger
+
+    @property
+    def idempotency(self) -> PostgresIdempotencyRepository:
+        """Provides access to the idempotency repository within the active session."""
+        if self._idempotency is None:
+            raise RuntimeError("PostgresUnitOfWork session is not active. Use 'async with uow:'.")
+        return self._idempotency
 
     async def commit(self) -> None:
         """Commits the active database transaction."""

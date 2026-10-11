@@ -10,11 +10,13 @@ from app.infrastructure.persistence.postgres.database import (
 from app.infrastructure.persistence.postgres.models import (
     AccountModel,
     Base,
+    IdempotencyRecordModel,
     LedgerEntryModel,
     TransactionModel,
 )
 from app.infrastructure.persistence.postgres.repositories import (
     PostgresAccountRepository,
+    PostgresIdempotencyRepository,
     PostgresLedgerRepository,
 )
 from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
@@ -22,8 +24,10 @@ from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfW
 __all__ = [
     "AccountModel",
     "Base",
+    "IdempotencyRecordModel",
     "LedgerEntryModel",
     "PostgresAccountRepository",
+    "PostgresIdempotencyRepository",
     "PostgresLedgerRepository",
     "PostgresUnitOfWork",
     "TransactionModel",

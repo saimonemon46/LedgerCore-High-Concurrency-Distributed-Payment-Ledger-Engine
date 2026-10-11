@@ -44,6 +44,7 @@ class TransferCommand:
     fee_account_id: str | None = None
     idempotency_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    tenant_id: str = "default"
 
 
 @dataclass(frozen=True)
