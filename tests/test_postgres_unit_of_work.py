@@ -9,6 +9,7 @@ Verifies:
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
 from decimal import Decimal
 
 import pytest
@@ -41,7 +42,7 @@ from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfW
 
 
 @pytest.fixture
-async def pg_engine() -> AsyncEngine:
+async def pg_engine() -> AsyncGenerator[AsyncEngine, None]:
     """Provides an active PostgreSQL async engine and verifies connectivity."""
     settings = get_settings()
     engine = create_async_db_engine(settings.database_url)
@@ -54,7 +55,9 @@ async def pg_engine() -> AsyncEngine:
 
 
 @pytest.fixture
-async def session_factory(pg_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+async def session_factory(
+    pg_engine: AsyncEngine,
+) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
     """Provides session factory and cleans up tables between tests."""
     factory = get_async_session_factory(pg_engine)
     # Clean tables before each test
