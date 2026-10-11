@@ -39,6 +39,24 @@ class IdempotencyConflictError(ApplicationError):
         )
 
 
+class IdempotencyPayloadMismatchError(ApplicationError):
+    """Raised when an idempotency key was previously used with a different request payload."""
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        super().__init__(
+            "Idempotency key was previously used with a different request payload."
+        )
+
+
+class IdempotencyInFlightError(IdempotencyConflictError):
+    """Raised when an identical request with the same idempotency key is actively processing."""
+
+    def __init__(self, key: str, retry_after_seconds: int = 1) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(key)
+
+
 class ReconciliationDivergenceError(ApplicationError):
     """Raised when mathematical audit reconciliation detects an invariant divergence."""
 

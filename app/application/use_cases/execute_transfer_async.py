@@ -16,6 +16,7 @@ from app.application.exceptions import (
     AccountNotFoundError,
     SelfTransferNotAllowedError,
 )
+from app.application.fingerprint import compute_transfer_command_hash
 from app.application.use_cases.execute_transfer import TransferCommand, TransferResult
 from app.domain.exceptions import (
     DomainError,
@@ -25,6 +26,9 @@ from app.domain.models import LedgerEntry
 from app.domain.state_machine import TransactionState, TransactionStateMachine
 from app.domain.strategies.fee_strategy import IFeeStrategy, P2PPeerFeeStrategy
 from app.domain.value_objects import Currency, Money
+from app.infrastructure.persistence.postgres.repositories import (
+    PostgresIdempotencyRepository,
+)
 from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 from app.ports.cache_port import ICachePort
 from app.ports.event_publisher_port import IEventPublisher, TransactionSettledEvent
@@ -97,6 +101,29 @@ class AsyncExecuteTransferUseCase:
         account_ids_to_lock = [command.from_account_id, command.to_account_id]
         if fee_account_id:
             account_ids_to_lock.append(fee_account_id)
+
+        # 4.5. Distributed Cryptographic Idempotency Check & In-Flight Lock Acquisition
+        if command.idempotency_key:
+            req_hash = compute_transfer_command_hash(
+                from_account_id=command.from_account_id,
+                to_account_id=command.to_account_id,
+                amount=transfer_amount.amount,
+                currency=str(transfer_amount.currency),
+                fee_account_id=fee_account_id,
+                metadata=command.metadata,
+                tenant_id=command.tenant_id,
+            )
+            async with self.uow.session_factory() as idemp_session:
+                idemp_repo = PostgresIdempotencyRepository(idemp_session)
+                acquired, cached_payload = await idemp_repo.check_or_acquire(
+                    key=command.idempotency_key,
+                    request_hash=req_hash,
+                    tenant_id=command.tenant_id,
+                )
+                await idemp_session.commit()
+
+            if not acquired and cached_payload is not None:
+                return TransferResult.from_dict(cached_payload)
 
         # 5. Execute Atomic Unit of Work
         async with self.uow as uow:
@@ -197,6 +224,29 @@ class AsyncExecuteTransferUseCase:
                 )
                 await uow.append_entries(entries, currency=str(transfer_amount.currency))
 
+                # If idempotency key provided, mark SETTLED in the exact same DB transaction!
+                if command.idempotency_key:
+                    result_dict = {
+                        "transaction_id": tx_id,
+                        "from_account_id": sender.account_id,
+                        "to_account_id": receiver.account_id,
+                        "amount": str(transfer_amount.amount),
+                        "currency": str(transfer_amount.currency),
+                        "fee": str(fee.amount),
+                        "from_balance_after": str(sender.balance.amount),
+                        "to_balance_after": str(receiver.balance.amount),
+                        "status": "SETTLED",
+                        "created_at": now,
+                        "ledger_entry_ids": [e.entry_id for e in entries],
+                        "metadata": command.metadata,
+                    }
+                    await uow.idempotency.mark_settled(
+                        key=command.idempotency_key,
+                        response_payload=result_dict,
+                        transaction_id=tx_id,
+                        tenant_id=command.tenant_id,
+                    )
+
                 # Commit atomically!
                 await uow.commit()
 
@@ -207,7 +257,7 @@ class AsyncExecuteTransferUseCase:
                     if fee_account is not None:
                         self.cache.delete(fee_account.account_id)
 
-            except DomainError:
+            except (DomainError, Exception):
                 if state_machine.state in (
                     TransactionState.INITIATED,
                     TransactionState.LOCKED,
@@ -216,14 +266,15 @@ class AsyncExecuteTransferUseCase:
                         state_machine.transition_to(TransactionState.FAILED)
                     except Exception:
                         pass
-                raise
-            except Exception:
-                if state_machine.state in (
-                    TransactionState.INITIATED,
-                    TransactionState.LOCKED,
-                ):
+                if command.idempotency_key:
                     try:
-                        state_machine.transition_to(TransactionState.FAILED)
+                        async with self.uow.session_factory() as idemp_session:
+                            idemp_repo = PostgresIdempotencyRepository(idemp_session)
+                            await idemp_repo.mark_failed(
+                                key=command.idempotency_key,
+                                tenant_id=command.tenant_id,
+                            )
+                            await idemp_session.commit()
                     except Exception:
                         pass
                 raise

@@ -2,13 +2,23 @@
 
 import time
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.exceptions import (
+    IdempotencyInFlightError,
+    IdempotencyPayloadMismatchError,
+)
 from app.domain.models import Account, AccountStatus, EntryType, LedgerEntry
 from app.domain.value_objects import Currency, Money
-from app.infrastructure.persistence.postgres.models import AccountModel, LedgerEntryModel
+from app.infrastructure.persistence.postgres.models import (
+    AccountModel,
+    IdempotencyRecordModel,
+    LedgerEntryModel,
+)
 
 
 class PostgresAccountRepository:
@@ -159,3 +169,143 @@ class PostgresLedgerRepository:
         result = await self.session.execute(stmt)
         val = result.scalar()
         return Decimal(str(val)) if val is not None else Decimal("0.0000")
+
+
+class PostgresIdempotencyRepository:
+    """Async repository managing durable idempotency records and cryptographic verification."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_record(
+        self,
+        key: str,
+        tenant_id: str = "default",
+    ) -> IdempotencyRecordModel | None:
+        """Retrieves an existing idempotency record by tenant and key."""
+        stmt = (
+            select(IdempotencyRecordModel)
+            .where(
+                IdempotencyRecordModel.tenant_id == tenant_id,
+                IdempotencyRecordModel.key == key,
+            )
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def check_or_acquire(
+        self,
+        key: str,
+        request_hash: str,
+        tenant_id: str = "default",
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Checks payload fingerprint and acquires an in-flight execution lock.
+
+        Returns:
+            tuple[bool, dict[str, Any] | None]:
+                (True, None) if lock successfully acquired -> proceed with execution.
+                (False, cached_payload) if previously SETTLED -> return cached result.
+
+        Raises:
+            IdempotencyPayloadMismatchError: If the key was used with a different request payload.
+            IdempotencyInFlightError: If an identical request is actively processing.
+        """
+        stmt = (
+            select(IdempotencyRecordModel)
+            .where(
+                IdempotencyRecordModel.tenant_id == tenant_id,
+                IdempotencyRecordModel.key == key,
+            )
+            .with_for_update()
+        )
+        result = await self.session.execute(stmt)
+        record = result.scalar_one_or_none()
+
+        if record is not None:
+            # 1. Detect request payload mutation
+            if record.request_hash != request_hash:
+                raise IdempotencyPayloadMismatchError(key)
+
+            # 2. Fast-path: Return cached completed execution
+            if record.status == "SETTLED":
+                return False, record.response_payload
+
+            # 3. Concurrent retry while request is in-flight
+            if record.status == "IN_PROGRESS":
+                raise IdempotencyInFlightError(key)
+
+            # 4. Previously failed request: allow retry
+            record.status = "IN_PROGRESS"
+            record.updated_at = func.now()
+            await self.session.flush()
+            return True, None
+
+        # Insert new IN_PROGRESS record
+        new_record = IdempotencyRecordModel(
+            key=key,
+            tenant_id=tenant_id,
+            request_hash=request_hash,
+            status="IN_PROGRESS",
+        )
+        self.session.add(new_record)
+        try:
+            await self.session.flush()
+            return True, None
+        except IntegrityError:
+            # Concurrency race condition: another transaction committed first
+            raise IdempotencyInFlightError(key) from None
+
+    async def mark_settled(
+        self,
+        key: str,
+        response_payload: dict[str, Any],
+        transaction_id: str | None = None,
+        tenant_id: str = "default",
+    ) -> None:
+        """Marks the idempotency record as SETTLED with its serialized response payload."""
+        stmt = (
+            select(IdempotencyRecordModel)
+            .where(
+                IdempotencyRecordModel.tenant_id == tenant_id,
+                IdempotencyRecordModel.key == key,
+            )
+        )
+        result = await self.session.execute(stmt)
+        record = result.scalar_one_or_none()
+        if record is not None:
+            record.status = "SETTLED"
+            record.response_payload = response_payload
+            record.transaction_id = transaction_id
+            record.updated_at = func.now()
+        else:
+            record = IdempotencyRecordModel(
+                key=key,
+                tenant_id=tenant_id,
+                request_hash="",
+                status="SETTLED",
+                response_payload=response_payload,
+                transaction_id=transaction_id,
+            )
+            self.session.add(record)
+        await self.session.flush()
+
+    async def mark_failed(
+        self,
+        key: str,
+        tenant_id: str = "default",
+    ) -> None:
+        """Marks the idempotency record as FAILED so client retries are permitted."""
+        stmt = (
+            select(IdempotencyRecordModel)
+            .where(
+                IdempotencyRecordModel.tenant_id == tenant_id,
+                IdempotencyRecordModel.key == key,
+            )
+        )
+        result = await self.session.execute(stmt)
+        record = result.scalar_one_or_none()
+        if record is not None:
+            record.status = "FAILED"
+            record.updated_at = func.now()
+            await self.session.flush()
+

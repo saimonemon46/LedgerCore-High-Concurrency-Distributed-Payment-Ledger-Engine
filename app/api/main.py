@@ -13,6 +13,8 @@ from app.api.routes import accounts, audit, health, transfers
 from app.application.exceptions import (
     AccountNotFoundError,
     IdempotencyConflictError,
+    IdempotencyInFlightError,
+    IdempotencyPayloadMismatchError,
     ReconciliationDivergenceError,
     SelfTransferNotAllowedError,
 )
@@ -140,6 +142,36 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(exc), "error_type": "IdempotencyConflict"},
+        )
+
+    @app.exception_handler(IdempotencyPayloadMismatchError)
+    async def idempotency_payload_mismatch_handler(
+        request: Request,
+        exc: IdempotencyPayloadMismatchError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": str(exc),
+                "error_type": "IdempotencyPayloadMismatch",
+                "key": exc.key,
+            },
+        )
+
+    @app.exception_handler(IdempotencyInFlightError)
+    async def idempotency_in_flight_handler(
+        request: Request,
+        exc: IdempotencyInFlightError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_425_TOO_EARLY,
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+            content={
+                "detail": str(exc),
+                "error_type": "IdempotencyInFlight",
+                "key": exc.key,
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
         )
 
     @app.exception_handler(CircuitBreakerOpenError)
