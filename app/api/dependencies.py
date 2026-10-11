@@ -3,8 +3,16 @@
 import logging
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
 from app.application.use_cases.audit_reconciliation import AuditReconciliationUseCase
+from app.application.use_cases.audit_reconciliation_async import (
+    AsyncAuditReconciliationUseCase,
+)
 from app.application.use_cases.execute_transfer import ExecuteTransferUseCase
+from app.application.use_cases.execute_transfer_async import (
+    AsyncExecuteTransferUseCase,
+)
 from app.application.use_cases.query_balance import QueryBalanceUseCase
 from app.infrastructure.concurrency.lock_manager import CanonicalLockManager
 from app.infrastructure.dsa.lru_ttl_cache import LRUTTLCache
@@ -14,6 +22,11 @@ from app.infrastructure.persistence.memory_repositories import (
     InMemoryIdempotencyStore,
     InMemoryLedgerRepository,
 )
+from app.infrastructure.persistence.postgres.database import (
+    create_async_db_engine,
+    get_async_session_factory,
+)
+from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 from app.infrastructure.resilience.circuit_breaker import CircuitBreaker
 from app.ports.cache_port import ICachePort
 from app.ports.event_publisher_port import IEventPublisher, TransactionSettledEvent
@@ -67,6 +80,24 @@ class Container:
         )
         self.worker_pool.start()
         self.event_publisher: IEventPublisher = WorkerPoolEventPublisher(self.worker_pool)
+        self._db_engine: AsyncEngine | None = None
+        self._session_factory: async_sessionmaker[AsyncSession] | None = None
+
+    def get_db_engine(self) -> AsyncEngine:
+        """Lazy-initializes and provides the PostgreSQL async engine."""
+        if self._db_engine is None:
+            self._db_engine = create_async_db_engine()
+        return self._db_engine
+
+    def get_session_factory(self) -> async_sessionmaker[AsyncSession]:
+        """Lazy-initializes and provides the PostgreSQL async session factory."""
+        if self._session_factory is None:
+            self._session_factory = get_async_session_factory(self.get_db_engine())
+        return self._session_factory
+
+    def get_postgres_uow(self) -> PostgresUnitOfWork:
+        """Instantiates a new PostgreSQL Unit of Work."""
+        return PostgresUnitOfWork(self.get_session_factory())
 
     @classmethod
     def get_instance(cls) -> "Container":
@@ -121,6 +152,27 @@ def get_circuit_breaker() -> CircuitBreaker:
 def get_worker_pool() -> ThreadSafeWorkerPool:
     """Provides Worker Pool."""
     return get_container().worker_pool
+
+
+def get_postgres_uow() -> PostgresUnitOfWork:
+    """Provides PostgreSQL Unit of Work."""
+    return get_container().get_postgres_uow()
+
+
+def get_async_transfer_use_case() -> AsyncExecuteTransferUseCase:
+    """Builds and provides AsyncExecuteTransferUseCase backed by PostgreSQL Unit of Work."""
+    c = get_container()
+    return AsyncExecuteTransferUseCase(
+        uow=c.get_postgres_uow(),
+        cache=c.cache,
+        event_publisher=c.event_publisher,
+    )
+
+
+def get_async_audit_use_case() -> AsyncAuditReconciliationUseCase:
+    """Builds and provides AsyncAuditReconciliationUseCase backed by PostgreSQL."""
+    c = get_container()
+    return AsyncAuditReconciliationUseCase(uow=c.get_postgres_uow())
 
 
 def get_transfer_use_case() -> ExecuteTransferUseCase:
