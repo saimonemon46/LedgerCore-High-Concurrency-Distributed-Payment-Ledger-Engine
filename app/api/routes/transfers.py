@@ -6,18 +6,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, status
 
 from app.api.dependencies import (
+    get_async_transfer_use_case,
     get_circuit_breaker,
-    get_idempotency_store,
-    get_transfer_use_case,
 )
 from app.api.schemas import TransferRequest, TransferResponse
-from app.application.decorators.circuit_decorator import CircuitBreakerWrapper
-from app.application.decorators.idempotency_decorator import IdempotencyWrapper
-from app.application.use_cases.execute_transfer import (
-    ExecuteTransferUseCase,
-    TransferCommand,
-    TransferResult,
-)
+from app.application.exceptions import ApplicationError
+from app.application.use_cases.execute_transfer import TransferCommand
+from app.application.use_cases.execute_transfer_async import AsyncExecuteTransferUseCase
+from app.domain.exceptions import DomainError
 from app.domain.strategies.fee_strategy import (
     FlatFeeStrategy,
     IFeeStrategy,
@@ -26,7 +22,6 @@ from app.domain.strategies.fee_strategy import (
 )
 from app.domain.value_objects import Currency, Money
 from app.infrastructure.resilience.circuit_breaker import CircuitBreaker
-from app.ports.idempotency_port import IIdempotencyStore
 
 router = APIRouter(prefix="/transfers", tags=["Transfers"])
 
@@ -49,14 +44,17 @@ def _resolve_fee_strategy(request: TransferRequest) -> IFeeStrategy:
     status_code=status.HTTP_200_OK,
     summary="Execute an atomic double-entry money transfer",
 )
-def execute_transfer(
+async def execute_transfer(
     request: TransferRequest,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
-    use_case: ExecuteTransferUseCase = Depends(get_transfer_use_case),
-    idempotency_store: IIdempotencyStore = Depends(get_idempotency_store),
+    use_case: AsyncExecuteTransferUseCase = Depends(get_async_transfer_use_case),
     circuit_breaker: CircuitBreaker = Depends(get_circuit_breaker),
 ) -> TransferResponse:
     """Executes a financial transfer with full idempotency and resilience protection."""
+    # Fast-fail if circuit breaker is OPEN
+    if not circuit_breaker.can_execute():
+        circuit_breaker.execute(lambda: None)
+
     strategy = _resolve_fee_strategy(request)
     currency = Currency(request.currency.upper())
     amount = Money(request.amount, currency)
@@ -71,16 +69,15 @@ def execute_transfer(
         metadata=request.metadata,
     )
 
-    # Compose resilience: Idempotency -> Circuit Breaker -> ExecuteTransferUseCase
-    resilient_execution = IdempotencyWrapper(
-        target=CircuitBreakerWrapper(
-            target=use_case.execute,
-            circuit_breaker=circuit_breaker,
-        ),
-        store=idempotency_store,
-    )
-
-    result: TransferResult = resilient_execution(command)
+    try:
+        result = await use_case.execute(command)
+        circuit_breaker.record_success()
+    except (DomainError, ApplicationError):
+        # Domain and business validation rules do not trip the infrastructure circuit breaker
+        raise
+    except Exception:
+        circuit_breaker.record_failure()
+        raise
 
     return TransferResponse(
         transaction_id=result.transaction_id,

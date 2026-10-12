@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.application.exceptions import AccountNotFoundError
+from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 from app.ports.cache_port import ICachePort
 from app.ports.repository_ports import IAccountRepository
 
@@ -80,6 +81,63 @@ class QueryBalanceUseCase:
 
         # 2. Cache Miss: Query repository
         account = self.account_repo.get_by_id(account_id)
+        if account is None:
+            raise AccountNotFoundError(account_id)
+
+        dto = AccountBalanceDTO(
+            account_id=account.account_id,
+            owner_name=account.owner_name,
+            balance=account.balance.amount,
+            currency=str(account.balance.currency),
+            status=str(account.status),
+            is_active=account.is_active(),
+            cached=False,
+        )
+
+        # 3. Populate L1 Cache
+        if self.cache is not None:
+            self.cache.put(account_id, dto.to_dict(), ttl_seconds=self.ttl_seconds)
+
+        return dto
+
+
+class AsyncQueryBalanceUseCase:
+    """Executes high-throughput balance queries with L1 cache-aside acceleration
+    backed by PostgreSQL.
+    """
+
+    def __init__(
+        self,
+        uow: PostgresUnitOfWork,
+        cache: ICachePort | None = None,
+        ttl_seconds: float | int = 60.0,
+    ) -> None:
+        self.uow = uow
+        self.cache = cache
+        self.ttl_seconds = ttl_seconds
+
+    async def execute(self, account_id: str) -> AccountBalanceDTO:
+        """Retrieves account balance using cache-aside optimization from PostgreSQL.
+
+        Args:
+            account_id: Unique account identifier.
+
+        Returns:
+            AccountBalanceDTO: Snapshot of account balance and status.
+
+        Raises:
+            AccountNotFoundError: If account does not exist in repository.
+        """
+        # 1. Check L1 Cache
+        if self.cache is not None:
+            cached_val = self.cache.get(account_id)
+            if cached_val is not None and isinstance(cached_val, dict):
+                return AccountBalanceDTO.from_dict(cached_val, cached=True)
+
+        # 2. Cache Miss: Query PostgreSQL via Unit of Work
+        async with self.uow as uow:
+            account = await uow.accounts.get_by_id(account_id)
+
         if account is None:
             raise AccountNotFoundError(account_id)
 

@@ -1,19 +1,45 @@
 """Verification test suite for LedgerCore FastAPI REST endpoints."""
 
+import asyncio
 from collections.abc import Generator
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.api.dependencies import Container
 from app.api.main import app
+from app.infrastructure.persistence.postgres.database import (
+    check_db_health,
+    create_async_db_engine,
+    init_db,
+)
 from app.infrastructure.resilience.circuit_breaker import CircuitState
 
 
 @pytest.fixture(autouse=True)
-def reset_services() -> None:
-    """Resets container state between tests for test isolation."""
+def reset_services() -> Generator[None, None, None]:
+    """Resets container state and truncates PostgreSQL tables between tests."""
+    Container.reset()
+
+    async def _clean() -> None:
+        engine = create_async_db_engine()
+        try:
+            if await check_db_health(engine):
+                await init_db(engine)
+                async with engine.begin() as conn:
+                    await conn.execute(
+                        text(
+                            "TRUNCATE TABLE idempotency_records, ledger_entries, "
+                            "transactions, accounts CASCADE;"
+                        )
+                    )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_clean())
+    yield
     Container.reset()
 
 
@@ -206,6 +232,109 @@ class TestTransfersEndpoint:
         assert res.status_code == 503
         assert "Retry-After" in res.headers
         assert res.json()["error_type"] == "CircuitBreakerOpen"
+
+    def test_transfer_persists_to_postgres_authoritatively(self, client: TestClient) -> None:
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-PG-A", "owner_name": "Alice", "initial_balance": "300.00"},
+        )
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-PG-B", "owner_name": "Bob", "initial_balance": "50.00"},
+        )
+
+        headers = {"Idempotency-Key": "pg-auth-transfer-001"}
+        transfer_payload = {
+            "from_account_id": "ACC-PG-A",
+            "to_account_id": "ACC-PG-B",
+            "amount": "100.00",
+            "currency": "USD",
+        }
+        res = client.post("/api/v1/transfers", json=transfer_payload, headers=headers)
+        assert res.status_code == 200
+        tx_id = res.json()["transaction_id"]
+
+        # Verify directly in PostgreSQL database that mutations are authoritative
+        async def _verify_db() -> None:
+            engine = create_async_db_engine()
+            try:
+                async with engine.connect() as conn:
+                    # 1. Accounts table updated
+                    res_a = await conn.execute(
+                        text("SELECT balance FROM accounts WHERE id = 'ACC-PG-A'")
+                    )
+                    assert res_a.scalar() == Decimal("200.0000")
+
+                    res_b = await conn.execute(
+                        text("SELECT balance FROM accounts WHERE id = 'ACC-PG-B'")
+                    )
+                    assert res_b.scalar() == Decimal("150.0000")
+
+                    # 2. Transaction recorded in transactions table
+                    res_tx = await conn.execute(
+                        text("SELECT status, amount FROM transactions WHERE id = :tx_id"),
+                        {"tx_id": tx_id},
+                    )
+                    row = res_tx.mappings().first()
+                    assert row is not None
+                    assert row["status"] == "SETTLED"
+                    assert row["amount"] == Decimal("100.0000")
+
+                    # 3. Journal entries recorded in ledger_entries table
+                    res_entries = await conn.execute(
+                        text("SELECT count(*) FROM ledger_entries WHERE transaction_id = :tx_id"),
+                        {"tx_id": tx_id},
+                    )
+                    assert res_entries.scalar() == 2
+
+                    # 4. Idempotency record recorded in idempotency_records table
+                    res_idemp = await conn.execute(
+                        text(
+                            "SELECT status, transaction_id FROM idempotency_records "
+                            "WHERE key = 'pg-auth-transfer-001'"
+                        )
+                    )
+                    idemp_row = res_idemp.mappings().first()
+                    assert idemp_row is not None
+                    assert idemp_row["status"] == "SETTLED"
+                    assert str(idemp_row["transaction_id"]) == tx_id
+            finally:
+                await engine.dispose()
+
+        asyncio.run(_verify_db())
+
+    def test_transfer_idempotency_payload_mismatch_returns_409(
+        self, client: TestClient
+    ) -> None:
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-PG-A", "owner_name": "Alice", "initial_balance": "300.00"},
+        )
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-PG-B", "owner_name": "Bob", "initial_balance": "50.00"},
+        )
+
+        headers = {"Idempotency-Key": "mismatch-key-999"}
+        payload1 = {
+            "from_account_id": "ACC-PG-A",
+            "to_account_id": "ACC-PG-B",
+            "amount": "100.00",
+            "currency": "USD",
+        }
+        res1 = client.post("/api/v1/transfers", json=payload1, headers=headers)
+        assert res1.status_code == 200
+
+        # Attempt to replay with altered amount
+        payload2 = {
+            "from_account_id": "ACC-PG-A",
+            "to_account_id": "ACC-PG-B",
+            "amount": "200.00",
+            "currency": "USD",
+        }
+        res2 = client.post("/api/v1/transfers", json=payload2, headers=headers)
+        assert res2.status_code == 409
+        assert res2.json()["error_type"] == "IdempotencyPayloadMismatch"
 
 
 class TestAuditEndpoint:

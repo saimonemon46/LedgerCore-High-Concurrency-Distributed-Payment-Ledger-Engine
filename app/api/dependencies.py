@@ -13,7 +13,10 @@ from app.application.use_cases.execute_transfer import ExecuteTransferUseCase
 from app.application.use_cases.execute_transfer_async import (
     AsyncExecuteTransferUseCase,
 )
-from app.application.use_cases.query_balance import QueryBalanceUseCase
+from app.application.use_cases.query_balance import (
+    AsyncQueryBalanceUseCase,
+    QueryBalanceUseCase,
+)
 from app.infrastructure.concurrency.lock_manager import CanonicalLockManager
 from app.infrastructure.dsa.lru_ttl_cache import LRUTTLCache
 from app.infrastructure.os_threading.worker_pool import ThreadSafeWorkerPool
@@ -173,6 +176,16 @@ def get_async_audit_use_case() -> AsyncAuditReconciliationUseCase:
     """Builds and provides AsyncAuditReconciliationUseCase backed by PostgreSQL."""
     c = get_container()
     return AsyncAuditReconciliationUseCase(uow=c.get_postgres_uow())
+
+
+def get_async_query_balance_use_case() -> AsyncQueryBalanceUseCase:
+    """Builds and provides AsyncQueryBalanceUseCase backed by PostgreSQL."""
+    c = get_container()
+    return AsyncQueryBalanceUseCase(
+        uow=c.get_postgres_uow(),
+        cache=c.cache,
+        ttl_seconds=60.0,
+    )
 
 
 def get_transfer_use_case() -> ExecuteTransferUseCase:

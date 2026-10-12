@@ -2,12 +2,14 @@
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.api.dependencies import get_audit_use_case
+from app.api.dependencies import get_async_audit_use_case
 from app.api.schemas import (
     AccountDiscrepancySchema,
     AuditReconciliationResponse,
 )
-from app.application.use_cases.audit_reconciliation import AuditReconciliationUseCase
+from app.application.use_cases.audit_reconciliation_async import (
+    AsyncAuditReconciliationUseCase,
+)
 
 router = APIRouter(prefix="/audit", tags=["Audit"])
 
@@ -18,15 +20,15 @@ router = APIRouter(prefix="/audit", tags=["Audit"])
     status_code=status.HTTP_200_OK,
     summary="Trigger real-time mathematical ledger reconciliation",
 )
-def reconcile_ledger(
+async def reconcile_ledger(
     raise_on_error: bool = Query(
         default=False,
         description="Whether to fail with 500 error on divergence",
     ),
-    use_case: AuditReconciliationUseCase = Depends(get_audit_use_case),
+    use_case: AsyncAuditReconciliationUseCase = Depends(get_async_audit_use_case),
 ) -> AuditReconciliationResponse:
     """Audits system-wide financial invariants, ensuring net zero conservation."""
-    report = use_case.reconcile(raise_on_error=raise_on_error)
+    report = await use_case.reconcile(raise_on_error=raise_on_error)
     return AuditReconciliationResponse(
         total_account_balances=str(report.total_account_balances),
         total_ledger_credits=str(report.total_ledger_credits),
