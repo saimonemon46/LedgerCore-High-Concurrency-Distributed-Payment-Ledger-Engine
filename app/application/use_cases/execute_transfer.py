@@ -1,11 +1,10 @@
-"""Execute Transfer Use Case orchestrating financial transactions.
+"""Synchronous in-memory Execute Transfer Use Case for unit testing.
 
-Enforces:
-- Clean Architecture (Orchestrates Domain entities and Port boundaries)
-- Canonical lock acquisition preventing Coffman circular-wait deadlocks
-- Strict double-entry bookkeeping conservation (sum(entries) == 0.00)
-- GoF State Machine lifecycle progression (INITIATED -> LOCKED -> COMMITTED -> SETTLED)
-- Automatic rollback and state marking to FAILED on any domain invariant violation
+NOTE: This use case operates with in-memory repositories and local threading.RLock.
+It is retained specifically for isolated unit tests, fast mocked simulations, and
+local micro-benchmarks, NOT as proof of distributed or multi-process correctness.
+For real multi-process and multi-node execution with ACID durability, use
+AsyncExecuteTransferUseCase backed by PostgreSQL Unit of Work and row-level locks.
 """
 
 import time

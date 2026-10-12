@@ -1,7 +1,10 @@
 """Thread-safe in-memory repository implementations for LedgerCore.
 
-Provides ultra-fast atomic repositories for testing, benchmarking, and local dev
-implementing IAccountRepository, ILedgerRepository, and IIdempotencyStore.
+NOTE: These in-memory adapters store state in process-local dictionaries and are
+retained strictly for isolated unit testing, mocking, and local micro-benchmarking.
+They are NOT intended as proof of distributed correctness or durability across
+multiple processes or machines. Real multi-process and multi-node persistence is
+provided by the PostgreSQL persistence layer.
 """
 
 import threading
