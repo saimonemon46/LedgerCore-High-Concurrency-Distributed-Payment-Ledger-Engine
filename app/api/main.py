@@ -26,6 +26,10 @@ from app.domain.exceptions import (
     InsufficientFundsError,
     LedgerInvariantViolationError,
 )
+from app.infrastructure.persistence.postgres.database import (
+    check_db_health,
+    init_db,
+)
 from app.infrastructure.resilience.circuit_breaker import CircuitBreakerOpenError
 
 logger = logging.getLogger("ledger_core.api")
@@ -36,10 +40,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manages application startup and graceful shutdown drain."""
     container = get_container()
     logger.info("Starting LedgerCore API services...")
+    engine = container.get_db_engine()
+    try:
+        if await check_db_health(engine):
+            await init_db(engine)
+            logger.info("PostgreSQL database initialized successfully.")
+        else:
+            logger.warning("PostgreSQL not reachable at startup. Schema init deferred.")
+    except Exception as err:
+        logger.warning("Could not initialize PostgreSQL on startup: %s", err)
+
     yield
+
     logger.info("Shutting down LedgerCore API services and draining workers...")
     if container.worker_pool.is_running:
         container.worker_pool.shutdown(wait=True)
+    if container._db_engine is not None:
+        await container._db_engine.dispose()
 
 
 def create_app() -> FastAPI:

@@ -50,7 +50,10 @@ class AccountModel(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("balance >= 0", name="chk_account_balance_non_negative"),
+        CheckConstraint(
+            "balance >= 0 OR id LIKE 'ACC-SYSTEM-RESERVE%'",
+            name="chk_account_balance_non_negative",
+        ),
     )
 
 

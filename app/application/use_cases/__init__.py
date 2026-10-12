@@ -18,6 +18,7 @@ from app.application.use_cases.execute_transfer_async import (
 )
 from app.application.use_cases.query_balance import (
     AccountBalanceDTO,
+    AsyncQueryBalanceUseCase,
     QueryBalanceUseCase,
 )
 
@@ -26,6 +27,7 @@ __all__ = [
     "AccountDiscrepancy",
     "AsyncAuditReconciliationUseCase",
     "AsyncExecuteTransferUseCase",
+    "AsyncQueryBalanceUseCase",
     "AuditReconciliationUseCase",
     "ExecuteTransferUseCase",
     "QueryBalanceUseCase",
