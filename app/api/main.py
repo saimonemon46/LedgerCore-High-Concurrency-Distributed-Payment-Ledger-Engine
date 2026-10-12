@@ -15,6 +15,8 @@ from app.application.exceptions import (
     IdempotencyConflictError,
     IdempotencyInFlightError,
     IdempotencyPayloadMismatchError,
+    InvalidIdempotencyKeyError,
+    MissingIdempotencyKeyError,
     ReconciliationDivergenceError,
     SelfTransferNotAllowedError,
 )
@@ -171,6 +173,30 @@ def create_app() -> FastAPI:
             content={
                 "detail": str(exc),
                 "error_type": "IdempotencyPayloadMismatch",
+                "key": exc.key,
+            },
+        )
+
+    @app.exception_handler(MissingIdempotencyKeyError)
+    async def missing_idempotency_key_handler(
+        request: Request,
+        exc: MissingIdempotencyKeyError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_type": "MissingIdempotencyKey"},
+        )
+
+    @app.exception_handler(InvalidIdempotencyKeyError)
+    async def invalid_idempotency_key_handler(
+        request: Request,
+        exc: InvalidIdempotencyKeyError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "error_type": "InvalidIdempotencyKey",
                 "key": exc.key,
             },
         )

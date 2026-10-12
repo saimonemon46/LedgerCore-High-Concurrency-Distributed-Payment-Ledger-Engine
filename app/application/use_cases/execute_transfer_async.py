@@ -14,6 +14,8 @@ from decimal import Decimal
 
 from app.application.exceptions import (
     AccountNotFoundError,
+    InvalidIdempotencyKeyError,
+    MissingIdempotencyKeyError,
     SelfTransferNotAllowedError,
 )
 from app.application.fingerprint import compute_transfer_command_hash
@@ -43,11 +45,15 @@ class AsyncExecuteTransferUseCase:
         cache: ICachePort | None = None,
         event_publisher: IEventPublisher | None = None,
         default_fee_strategy: IFeeStrategy | None = None,
+        require_idempotency: bool = False,
+        in_flight_timeout_seconds: float = 120.0,
     ) -> None:
         self.uow = uow
         self.cache = cache
         self.event_publisher = event_publisher
         self.default_fee_strategy = default_fee_strategy or P2PPeerFeeStrategy()
+        self.require_idempotency = require_idempotency
+        self.in_flight_timeout_seconds = in_flight_timeout_seconds
 
     async def execute(self, command: TransferCommand) -> TransferResult:
         """Executes a transfer within a single atomic PostgreSQL transaction boundary.
@@ -64,12 +70,25 @@ class AsyncExecuteTransferUseCase:
             InsufficientFundsError: If sender has inadequate funds.
             CurrencyMismatchError: If account and transfer currencies conflict.
             LedgerInvariantViolationError: If double-entry conservation fails.
+            MissingIdempotencyKeyError: If idempotency key is required but missing.
+            InvalidIdempotencyKeyError: If idempotency key is invalid or oversized.
         """
         # 1. Validation: Prevent self-transfer
         if command.from_account_id == command.to_account_id:
             raise SelfTransferNotAllowedError(
                 f"Source and destination accounts are identical: {command.from_account_id}."
             )
+
+        # 1.5. Validate Idempotency Key
+        clean_key: str | None = None
+        if self.require_idempotency or command.idempotency_key is not None:
+            if not command.idempotency_key or not str(command.idempotency_key).strip():
+                raise MissingIdempotencyKeyError()
+            clean_key = str(command.idempotency_key).strip()
+            if len(clean_key) > 128:
+                raise InvalidIdempotencyKeyError(
+                    clean_key, "Key exceeds maximum length of 128 characters."
+                )
 
         # 2. Determine transfer currency and money amount
         if isinstance(command.amount, Money):
@@ -103,7 +122,7 @@ class AsyncExecuteTransferUseCase:
             account_ids_to_lock.append(fee_account_id)
 
         # 4.5. Distributed Cryptographic Idempotency Check & In-Flight Lock Acquisition
-        if command.idempotency_key:
+        if clean_key:
             req_hash = compute_transfer_command_hash(
                 from_account_id=command.from_account_id,
                 to_account_id=command.to_account_id,
@@ -116,9 +135,10 @@ class AsyncExecuteTransferUseCase:
             async with self.uow.session_factory() as idemp_session:
                 idemp_repo = PostgresIdempotencyRepository(idemp_session)
                 acquired, cached_payload = await idemp_repo.check_or_acquire(
-                    key=command.idempotency_key,
+                    key=clean_key,
                     request_hash=req_hash,
                     tenant_id=command.tenant_id,
+                    in_flight_timeout_seconds=self.in_flight_timeout_seconds,
                 )
                 await idemp_session.commit()
 
@@ -214,7 +234,8 @@ class AsyncExecuteTransferUseCase:
 
                 await uow.record_transaction(
                     tx_id=tx_id,
-                    idempotency_key=command.idempotency_key,
+                    idempotency_key=clean_key,
+                    tenant_id=command.tenant_id,
                     from_account_id=sender.account_id,
                     to_account_id=receiver.account_id,
                     amount=transfer_amount.amount,
@@ -225,7 +246,7 @@ class AsyncExecuteTransferUseCase:
                 await uow.append_entries(entries, currency=str(transfer_amount.currency))
 
                 # If idempotency key provided, mark SETTLED in the exact same DB transaction!
-                if command.idempotency_key:
+                if clean_key:
                     result_dict = {
                         "transaction_id": tx_id,
                         "from_account_id": sender.account_id,
@@ -241,7 +262,7 @@ class AsyncExecuteTransferUseCase:
                         "metadata": command.metadata,
                     }
                     await uow.idempotency.mark_settled(
-                        key=command.idempotency_key,
+                        key=clean_key,
                         response_payload=result_dict,
                         transaction_id=tx_id,
                         tenant_id=command.tenant_id,
@@ -266,12 +287,12 @@ class AsyncExecuteTransferUseCase:
                         state_machine.transition_to(TransactionState.FAILED)
                     except Exception:
                         pass
-                if command.idempotency_key:
+                if clean_key:
                     try:
                         async with self.uow.session_factory() as idemp_session:
                             idemp_repo = PostgresIdempotencyRepository(idemp_session)
                             await idemp_repo.mark_failed(
-                                key=command.idempotency_key,
+                                key=clean_key,
                                 tenant_id=command.tenant_id,
                             )
                             await idemp_session.commit()

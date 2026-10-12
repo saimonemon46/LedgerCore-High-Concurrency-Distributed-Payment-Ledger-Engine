@@ -10,7 +10,11 @@ from app.api.dependencies import (
     get_circuit_breaker,
 )
 from app.api.schemas import TransferRequest, TransferResponse
-from app.application.exceptions import ApplicationError
+from app.application.exceptions import (
+    ApplicationError,
+    InvalidIdempotencyKeyError,
+    MissingIdempotencyKeyError,
+)
 from app.application.use_cases.execute_transfer import TransferCommand
 from app.application.use_cases.execute_transfer_async import AsyncExecuteTransferUseCase
 from app.domain.exceptions import DomainError
@@ -50,10 +54,18 @@ async def execute_transfer(
     use_case: AsyncExecuteTransferUseCase = Depends(get_async_transfer_use_case),
     circuit_breaker: CircuitBreaker = Depends(get_circuit_breaker),
 ) -> TransferResponse:
-    """Executes a financial transfer with full idempotency and resilience protection."""
+    """Executes a financial transfer with required idempotency and resilience protection."""
     # Fast-fail if circuit breaker is OPEN
     if not circuit_breaker.can_execute():
         circuit_breaker.execute(lambda: None)
+
+    # Require and validate idempotency key for payment creation
+    key = idempotency_key or getattr(request, "idempotency_key", None)
+    if not key or not str(key).strip():
+        raise MissingIdempotencyKeyError()
+    clean_key = str(key).strip()
+    if len(clean_key) > 128:
+        raise InvalidIdempotencyKeyError(clean_key, "Key exceeds maximum length of 128 characters.")
 
     strategy = _resolve_fee_strategy(request)
     currency = Currency(request.currency.upper())
@@ -65,7 +77,7 @@ async def execute_transfer(
         amount=amount,
         fee_strategy=strategy,
         fee_account_id=request.fee_account_id,
-        idempotency_key=idempotency_key,
+        idempotency_key=clean_key,
         metadata=request.metadata,
     )
 

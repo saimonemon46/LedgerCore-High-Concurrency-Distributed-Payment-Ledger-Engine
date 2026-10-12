@@ -153,6 +153,7 @@ class PostgresUnitOfWork:
         status: str,
         fee: Decimal = Decimal("0.0000"),
         idempotency_key: str | None = None,
+        tenant_id: str = "default",
         error_reason: str | None = None,
     ) -> TransactionModel:
         """Persists a transaction lifecycle audit record within the atomic transaction."""
@@ -162,6 +163,7 @@ class PostgresUnitOfWork:
         tx_model = TransactionModel(
             id=tx_id,
             idempotency_key=idempotency_key,
+            tenant_id=tenant_id,
             source_account_id=from_account_id,
             destination_account_id=to_account_id,
             amount=amount,

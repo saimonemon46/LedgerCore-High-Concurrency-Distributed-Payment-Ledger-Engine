@@ -61,6 +61,24 @@ async def init_db(engine: AsyncEngine) -> None:
     logger.info("Initializing relational database schema for LedgerCore...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                "ALTER TABLE transactions "
+                "ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64) NOT NULL DEFAULT 'default';"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_transactions_tenant_idempotency_key "
+                "ON transactions(tenant_id, idempotency_key);"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_idempotency_records_tenant_key "
+                "ON idempotency_records(tenant_id, key);"
+            )
+        )
     logger.info("Relational database schema successfully initialized.")
 
 

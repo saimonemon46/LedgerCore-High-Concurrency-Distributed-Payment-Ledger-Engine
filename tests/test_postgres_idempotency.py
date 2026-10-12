@@ -9,15 +9,19 @@ Verifies:
 """
 
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.application.exceptions import (
     IdempotencyInFlightError,
     IdempotencyPayloadMismatchError,
+    InvalidIdempotencyKeyError,
+    MissingIdempotencyKeyError,
 )
 from app.application.fingerprint import (
     compute_transfer_fingerprint,
@@ -35,7 +39,11 @@ from app.infrastructure.persistence.postgres.database import (
     get_async_session_factory,
     init_db,
 )
-from app.infrastructure.persistence.postgres.models import AccountModel
+from app.infrastructure.persistence.postgres.models import (
+    AccountModel,
+    IdempotencyRecordModel,
+    TransactionModel,
+)
 from app.infrastructure.persistence.postgres.repositories import (
     PostgresIdempotencyRepository,
 )
@@ -319,3 +327,205 @@ class TestPostgresDurableIdempotency:
                 )
             ).scalar()
             assert count == 2
+
+    async def test_interrupted_request_lease_timeout_safe_recovery(
+        self,
+        uow: PostgresUnitOfWork,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """When a request was interrupted/crashed, lease expiration allows safe recovery."""
+        await self._seed_account(session_factory, "ACC-CRASH-SRC", Decimal("400.00"))
+        await self._seed_account(session_factory, "ACC-CRASH-DST", Decimal("100.00"))
+
+        key = "INTERRUPTED-TX-KEY-001"
+        req_hash = compute_transfer_fingerprint(
+            from_account_id="ACC-CRASH-SRC",
+            to_account_id="ACC-CRASH-DST",
+            amount=Decimal("100.00"),
+            currency="USD",
+        )
+
+        # Simulate interrupted worker: record is IN_PROGRESS with timestamp 300s in the past
+        past_time = datetime.now(UTC) - timedelta(seconds=300)
+        async with session_factory() as session:
+            stalled_record = IdempotencyRecordModel(
+                key=key,
+                tenant_id="default",
+                request_hash=req_hash,
+                status="IN_PROGRESS",
+                created_at=past_time,
+                updated_at=past_time,
+            )
+            session.add(stalled_record)
+            await session.commit()
+
+        # Re-execute transfer with in_flight_timeout_seconds=120.0 (300s > 120s => expired)
+        use_case = AsyncExecuteTransferUseCase(uow=uow, in_flight_timeout_seconds=120.0)
+        cmd = TransferCommand(
+            from_account_id="ACC-CRASH-SRC",
+            to_account_id="ACC-CRASH-DST",
+            amount=Decimal("100.00"),
+            currency=Currency.USD,
+            idempotency_key=key,
+        )
+
+        # Interrupted execution safely recovers and completes!
+        result = await use_case.execute(cmd)
+        assert result.status == "SETTLED"
+        assert result.from_balance_after.amount == Decimal("300.00")
+        assert result.to_balance_after.amount == Decimal("200.00")
+
+        # Verify idempotency record is now SETTLED in PostgreSQL
+        async with session_factory() as session:
+            rec = (
+                await session.execute(
+                    text("SELECT status FROM idempotency_records WHERE key = :key;"),
+                    {"key": key},
+                )
+            ).scalar()
+            assert rec == "SETTLED"
+
+    async def test_active_in_flight_lease_blocks_concurrent_execution(
+        self,
+        uow: PostgresUnitOfWork,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """When an in-flight request is actively processing within lease window, reject with 425."""
+        await self._seed_account(session_factory, "ACC-ACTIVE-SRC", Decimal("500.00"))
+        await self._seed_account(session_factory, "ACC-ACTIVE-DST", Decimal("100.00"))
+
+        key = "ACTIVE-INFLIGHT-KEY-002"
+        req_hash = compute_transfer_fingerprint(
+            from_account_id="ACC-ACTIVE-SRC",
+            to_account_id="ACC-ACTIVE-DST",
+            amount=Decimal("50.00"),
+            currency="USD",
+        )
+
+        # Active worker created IN_PROGRESS record just 2 seconds ago
+        recent_time = datetime.now(UTC) - timedelta(seconds=2)
+        async with session_factory() as session:
+            active_record = IdempotencyRecordModel(
+                key=key,
+                tenant_id="default",
+                request_hash=req_hash,
+                status="IN_PROGRESS",
+                created_at=recent_time,
+                updated_at=recent_time,
+            )
+            session.add(active_record)
+            await session.commit()
+
+        # Concurrent request should be blocked (lease is 120s, only 2s elapsed)
+        use_case = AsyncExecuteTransferUseCase(uow=uow, in_flight_timeout_seconds=120.0)
+        cmd = TransferCommand(
+            from_account_id="ACC-ACTIVE-SRC",
+            to_account_id="ACC-ACTIVE-DST",
+            amount=Decimal("50.00"),
+            currency=Currency.USD,
+            idempotency_key=key,
+        )
+
+        with pytest.raises(IdempotencyInFlightError) as exc_info:
+            await use_case.execute(cmd)
+        assert exc_info.value.key == key
+
+    async def test_database_uniqueness_constraint_enforced_on_idempotency_scope(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Verifies database uniqueness constraints on scoped tenant keys."""
+        # 1. Test idempotency_records uniqueness on (tenant_id, key)
+        async with session_factory() as session1:
+            rec1 = IdempotencyRecordModel(
+                key="UNIQ-TEST-KEY",
+                tenant_id="tenant_x",
+                request_hash="hash1",
+                status="SETTLED",
+            )
+            session1.add(rec1)
+            await session1.commit()
+
+        async with session_factory() as session2:
+            rec2 = IdempotencyRecordModel(
+                key="UNIQ-TEST-KEY",
+                tenant_id="tenant_x",
+                request_hash="hash2",
+                status="SETTLED",
+            )
+            session2.add(rec2)
+            with pytest.raises(IntegrityError):
+                await session2.commit()
+
+        # 2. Test transactions uniqueness on (tenant_id, idempotency_key)
+        await self._seed_account(session_factory, "ACC-U1", Decimal("500.00"))
+        await self._seed_account(session_factory, "ACC-U2", Decimal("100.00"))
+
+        async with session_factory() as session3:
+            tx1 = TransactionModel(
+                id="TX-UNIQ-001",
+                idempotency_key="UNIQ-IDEMP-TX",
+                tenant_id="tenant_x",
+                source_account_id="ACC-U1",
+                destination_account_id="ACC-U2",
+                amount=Decimal("10.00"),
+                currency="USD",
+                status="SETTLED",
+            )
+            session3.add(tx1)
+            await session3.commit()
+
+        async with session_factory() as session4:
+            tx2 = TransactionModel(
+                id="TX-UNIQ-002",
+                idempotency_key="UNIQ-IDEMP-TX",
+                tenant_id="tenant_x",
+                source_account_id="ACC-U1",
+                destination_account_id="ACC-U2",
+                amount=Decimal("20.00"),
+                currency="USD",
+                status="SETTLED",
+            )
+            session4.add(tx2)
+            with pytest.raises(IntegrityError):
+                await session4.commit()
+
+    async def test_mandatory_idempotency_key_validation_in_use_case(
+        self,
+        uow: PostgresUnitOfWork,
+    ) -> None:
+        """When require_idempotency=True, missing or invalid keys are rejected."""
+        use_case = AsyncExecuteTransferUseCase(uow=uow, require_idempotency=True)
+
+        # Missing key
+        cmd_missing = TransferCommand(
+            from_account_id="ACC-A",
+            to_account_id="ACC-B",
+            amount=Decimal("10.00"),
+            currency=Currency.USD,
+            idempotency_key=None,
+        )
+        with pytest.raises(MissingIdempotencyKeyError):
+            await use_case.execute(cmd_missing)
+
+        # Blank key
+        cmd_blank = TransferCommand(
+            from_account_id="ACC-A",
+            to_account_id="ACC-B",
+            amount=Decimal("10.00"),
+            currency=Currency.USD,
+            idempotency_key="   ",
+        )
+        with pytest.raises(MissingIdempotencyKeyError):
+            await use_case.execute(cmd_blank)
+
+        # Oversized key (>128 chars)
+        cmd_oversized = TransferCommand(
+            from_account_id="ACC-A",
+            to_account_id="ACC-B",
+            amount=Decimal("10.00"),
+            currency=Currency.USD,
+            idempotency_key="k" * 129,
+        )
+        with pytest.raises(InvalidIdempotencyKeyError):
+            await use_case.execute(cmd_oversized)

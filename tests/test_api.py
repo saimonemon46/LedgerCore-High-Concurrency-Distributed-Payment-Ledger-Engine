@@ -115,6 +115,53 @@ class TestAccountsEndpoints:
 class TestTransfersEndpoint:
     """Verifies atomic transfers, idempotency guarantees, and error handling."""
 
+    def test_transfer_missing_idempotency_key_returns_400(self, client: TestClient) -> None:
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-A", "owner_name": "Alice", "initial_balance": "500.00"},
+        )
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-B", "owner_name": "Bob", "initial_balance": "50.00"},
+        )
+
+        res = client.post(
+            "/api/v1/transfers",
+            json={
+                "from_account_id": "ACC-A",
+                "to_account_id": "ACC-B",
+                "amount": "100.00",
+            },
+        )
+        assert res.status_code == 400
+        assert res.json()["error_type"] == "MissingIdempotencyKey"
+
+    def test_transfer_blank_idempotency_key_returns_400(self, client: TestClient) -> None:
+        res = client.post(
+            "/api/v1/transfers",
+            json={
+                "from_account_id": "ACC-A",
+                "to_account_id": "ACC-B",
+                "amount": "100.00",
+            },
+            headers={"Idempotency-Key": "   "},
+        )
+        assert res.status_code == 400
+        assert res.json()["error_type"] == "MissingIdempotencyKey"
+
+    def test_transfer_oversized_idempotency_key_returns_400(self, client: TestClient) -> None:
+        res = client.post(
+            "/api/v1/transfers",
+            json={
+                "from_account_id": "ACC-A",
+                "to_account_id": "ACC-B",
+                "amount": "100.00",
+            },
+            headers={"Idempotency-Key": "x" * 129},
+        )
+        assert res.status_code == 400
+        assert res.json()["error_type"] == "InvalidIdempotencyKey"
+
     def test_transfer_success(self, client: TestClient) -> None:
         # Provision Alice ($500) and Bob ($50)
         client.post(
@@ -126,6 +173,7 @@ class TestTransfersEndpoint:
             json={"account_id": "ACC-B", "owner_name": "Bob", "initial_balance": "50.00"},
         )
 
+        headers = {"Idempotency-Key": "transfer-success-key-001"}
         transfer_payload = {
             "from_account_id": "ACC-A",
             "to_account_id": "ACC-B",
@@ -133,7 +181,7 @@ class TestTransfersEndpoint:
             "currency": "USD",
             "fee_strategy_type": "P2P",
         }
-        res = client.post("/api/v1/transfers", json=transfer_payload)
+        res = client.post("/api/v1/transfers", json=transfer_payload, headers=headers)
         assert res.status_code == 200
         data = res.json()
         assert data["from_account_id"] == "ACC-A"
@@ -197,6 +245,7 @@ class TestTransfersEndpoint:
                 "to_account_id": "ACC-B",
                 "amount": "100.00",
             },
+            headers={"Idempotency-Key": "insufficient-test-key"},
         )
         assert res.status_code == 422
         assert res.json()["error_type"] == "InsufficientFunds"
@@ -209,6 +258,7 @@ class TestTransfersEndpoint:
                 "to_account_id": "ACC-A",
                 "amount": "10.00",
             },
+            headers={"Idempotency-Key": "self-transfer-test-key"},
         )
         assert res.status_code == 422
         assert res.json()["error_type"] == "SelfTransferNotAllowed"
@@ -353,6 +403,7 @@ class TestAuditEndpoint:
         client.post(
             "/api/v1/transfers",
             json={"from_account_id": "ACC-1", "to_account_id": "ACC-2", "amount": "50.00"},
+            headers={"Idempotency-Key": "audit-transfer-key-01"},
         )
 
         res = client.post("/api/v1/audit/reconcile")
