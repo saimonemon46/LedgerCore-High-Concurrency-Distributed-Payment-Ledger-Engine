@@ -47,6 +47,39 @@ jobs:
   test-and-coverage:
     name: Concurrency & Invariant Test Suite
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledger_user
+          POSTGRES_PASSWORD: ledger_secret
+          POSTGRES_DB: ledger_core
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ledger_user -d ledger_core"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_USER: ledger_user
+      POSTGRES_PASSWORD: ledger_secret
+      POSTGRES_DB: ledger_core
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      DATABASE_URL: postgresql+asyncpg://ledger_user:ledger_secret@localhost:5432/ledger_core
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

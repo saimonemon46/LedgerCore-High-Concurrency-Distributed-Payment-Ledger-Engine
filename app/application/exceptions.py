@@ -70,3 +70,19 @@ class ReconciliationDivergenceError(ApplicationError):
         super().__init__(
             f"Audit reconciliation failed: Non-zero system divergence of {divergence} detected."
         )
+
+
+class MissingIdempotencyKeyError(ApplicationError):
+    """Raised when an idempotency key is missing for payment creation."""
+
+    def __init__(self) -> None:
+        super().__init__("Idempotency-Key header is required for payment creation.")
+
+
+class InvalidIdempotencyKeyError(ApplicationError):
+    """Raised when an idempotency key is malformed or invalid."""
+
+    def __init__(self, key: str, reason: str = "Invalid idempotency key format.") -> None:
+        self.key = key
+        self.reason = reason
+        super().__init__(f"Invalid idempotency key '{key}': {reason}")

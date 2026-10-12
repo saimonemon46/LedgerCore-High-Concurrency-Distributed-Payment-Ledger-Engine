@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -64,6 +65,7 @@ class TransactionModel(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
     source_account_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("accounts.id", ondelete="RESTRICT"),
@@ -106,6 +108,15 @@ class TransactionModel(Base):
         "AccountModel",
         foreign_keys=[destination_account_id],
         lazy="joined",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_transactions_tenant_idempotency_key",
+        ),
+        Index("idx_transactions_tenant_idempotency", "tenant_id", "idempotency_key"),
     )
 
 
@@ -184,6 +195,7 @@ class IdempotencyRecordModel(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("tenant_id", "key", name="uq_idempotency_records_tenant_key"),
         Index("idx_idempotency_lookup", "tenant_id", "key"),
         Index("idx_idempotency_status", "status"),
     )

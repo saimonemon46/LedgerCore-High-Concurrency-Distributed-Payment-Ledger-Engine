@@ -1,6 +1,6 @@
-"""PostgreSQL repository implementations mapping domain models to relational schemas."""
-
+import logging
 import time
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -19,6 +19,8 @@ from app.infrastructure.persistence.postgres.models import (
     IdempotencyRecordModel,
     LedgerEntryModel,
 )
+
+logger = logging.getLogger("ledger_core.idempotency")
 
 
 class PostgresAccountRepository:
@@ -198,17 +200,18 @@ class PostgresIdempotencyRepository:
         key: str,
         request_hash: str,
         tenant_id: str = "default",
+        in_flight_timeout_seconds: float = 120.0,
     ) -> tuple[bool, dict[str, Any] | None]:
         """Checks payload fingerprint and acquires an in-flight execution lock.
 
         Returns:
             tuple[bool, dict[str, Any] | None]:
-                (True, None) if lock successfully acquired -> proceed with execution.
+                (True, None) if lock acquired or safely recovered -> proceed with execution.
                 (False, cached_payload) if previously SETTLED -> return cached result.
 
         Raises:
-            IdempotencyPayloadMismatchError: If the key was used with a different request payload.
-            IdempotencyInFlightError: If an identical request is actively processing.
+            IdempotencyPayloadMismatchError: If the key was used with a different payload.
+            IdempotencyInFlightError: If identical request is processing within lease window.
         """
         stmt = (
             select(IdempotencyRecordModel)
@@ -230,9 +233,31 @@ class PostgresIdempotencyRepository:
             if record.status == "SETTLED":
                 return False, record.response_payload
 
-            # 3. Concurrent retry while request is in-flight
+            # 3. Interrupted request recovery or in-flight active conflict
             if record.status == "IN_PROGRESS":
-                raise IdempotencyInFlightError(key)
+                now_utc = datetime.now(UTC)
+                record_time = record.updated_at or record.created_at
+                if record_time is not None and record_time.tzinfo is None:
+                    record_time = record_time.replace(tzinfo=UTC)
+
+                elapsed_seconds = (now_utc - record_time).total_seconds() if record_time else 0.0
+
+                if elapsed_seconds > in_flight_timeout_seconds:
+                    logger.warning(
+                        "Safely recovering interrupted request for key '%s' "
+                        "(in-flight lease expired after %.1fs > timeout %.1fs).",
+                        key,
+                        elapsed_seconds,
+                        in_flight_timeout_seconds,
+                    )
+                    record.status = "IN_PROGRESS"
+                    record.updated_at = func.now()
+                    await self.session.flush()
+                    return True, None
+
+                # Active execution within valid lease window
+                retry_after = max(1, int(in_flight_timeout_seconds - elapsed_seconds))
+                raise IdempotencyInFlightError(key, retry_after_seconds=min(retry_after, 5))
 
             # 4. Previously failed request: allow retry
             record.status = "IN_PROGRESS"
@@ -251,9 +276,27 @@ class PostgresIdempotencyRepository:
         try:
             await self.session.flush()
             return True, None
-        except IntegrityError:
+        except IntegrityError as err:
             # Concurrency race condition: another transaction committed first
-            raise IdempotencyInFlightError(key) from None
+            await self.session.rollback()
+            stmt = (
+                select(IdempotencyRecordModel)
+                .where(
+                    IdempotencyRecordModel.tenant_id == tenant_id,
+                    IdempotencyRecordModel.key == key,
+                )
+                .with_for_update()
+            )
+            res = await self.session.execute(stmt)
+            rec = res.scalar_one_or_none()
+            if rec is not None:
+                if rec.request_hash != request_hash:
+                    raise IdempotencyPayloadMismatchError(key) from err
+                if rec.status == "SETTLED":
+                    return False, rec.response_payload
+                if rec.status == "IN_PROGRESS":
+                    raise IdempotencyInFlightError(key) from err
+            raise IdempotencyInFlightError(key) from err
 
     async def mark_settled(
         self,

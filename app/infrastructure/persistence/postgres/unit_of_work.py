@@ -104,9 +104,17 @@ class PostgresUnitOfWork:
     ) -> dict[str, Account]:
         """Locks all participating accounts in deterministic ascending lexicographical order.
 
-        By enforcing min(ids) -> max(ids) lock acquisition via PostgreSQL's
-        'SELECT ... FOR UPDATE', circular wait is mathematically eliminated,
-        guaranteeing zero Coffman deadlocks across distributed nodes.
+        Enforces strictly monotonic min(ids) -> ... -> max(ids) row-level lock acquisition
+        via PostgreSQL's 'SELECT ... FOR UPDATE' inside the single active transaction.
+
+        By querying and locking each account by primary key in sorted lexicographical order:
+        1. Lock for min(ids) is physically requested and acquired first in PostgreSQL.
+        2. Lock for next(ids) is requested and acquired second.
+        3. Lock for max(ids) is requested and acquired third.
+
+        Because every concurrent application process or machine requests row locks in the
+        exact same ascending order, circular wait (Coffman condition #4) is mathematically
+        eliminated, guaranteeing zero deadlocks across all distributed nodes sharing the DB.
         """
         if self.session is None:
             raise RuntimeError("Unit of Work is not active.")
@@ -116,24 +124,23 @@ class PostgresUnitOfWork:
         if not sorted_ids:
             return {}
 
-        stmt = (
-            select(AccountModel)
-            .where(AccountModel.id.in_(sorted_ids))
-            .order_by(AccountModel.id.asc())
-            .with_for_update()
-        )
-        result = await self.session.execute(stmt)
-        models = result.scalars().all()
-
         domain_accounts: dict[str, Account] = {}
-        for m in models:
-            bal_dec = Decimal(str(m.balance)).quantize(Decimal("0.01"))
-            domain_accounts[m.id] = Account(
-                account_id=m.id,
-                owner_name=m.owner_name,
-                balance=Money(bal_dec, Currency(m.currency)),
-                status=AccountStatus(m.status),
+        for acc_id in sorted_ids:
+            stmt = (
+                select(AccountModel)
+                .where(AccountModel.id == acc_id)
+                .with_for_update()
             )
+            result = await self.session.execute(stmt)
+            m = result.scalar_one_or_none()
+            if m is not None:
+                bal_dec = Decimal(str(m.balance)).quantize(Decimal("0.01"))
+                domain_accounts[m.id] = Account(
+                    account_id=m.id,
+                    owner_name=m.owner_name,
+                    balance=Money(bal_dec, Currency(m.currency)),
+                    status=AccountStatus(m.status),
+                )
         return domain_accounts
 
     async def record_transaction(
@@ -146,6 +153,7 @@ class PostgresUnitOfWork:
         status: str,
         fee: Decimal = Decimal("0.0000"),
         idempotency_key: str | None = None,
+        tenant_id: str = "default",
         error_reason: str | None = None,
     ) -> TransactionModel:
         """Persists a transaction lifecycle audit record within the atomic transaction."""
@@ -155,6 +163,7 @@ class PostgresUnitOfWork:
         tx_model = TransactionModel(
             id=tx_id,
             idempotency_key=idempotency_key,
+            tenant_id=tenant_id,
             source_account_id=from_account_id,
             destination_account_id=to_account_id,
             amount=amount,

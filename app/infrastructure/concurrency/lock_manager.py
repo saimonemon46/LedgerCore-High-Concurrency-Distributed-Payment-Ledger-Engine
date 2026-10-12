@@ -1,8 +1,11 @@
-"""Canonical Lock Manager eliminating deadlocks via deterministic resource ordering.
+"""Canonical Lock Manager for single-process in-memory concurrency testing.
 
-Proves Coffman circular-wait prevention:
-For any simultaneous bilateral transfers (A -> B and B -> A), locks are always
-acquired in ascending lexicographical sequence (min(A, B) -> max(A, B)).
+NOTE: This in-memory implementation uses threading.RLock and is strictly process-local.
+It is retained solely for isolated unit tests, mock execution, and local fast benchmarks,
+NOT as proof of distributed or multi-process correctness.
+For real multi-process and multi-machine concurrency control, use
+PostgresUnitOfWork.lock_accounts_monotonically() which acquires real PostgreSQL
+row-level locks (SELECT ... FOR UPDATE) inside an ACID database transaction.
 """
 
 from collections.abc import Iterator, Sequence
@@ -12,9 +15,10 @@ from app.domain.models import Account
 
 
 class CanonicalLockManager:
-    """Manages thread-safe acquisition of account locks in globally sorted order.
+    """Manages thread-safe acquisition of account locks in globally sorted order in-memory.
 
-    Eliminates circular-wait deadlocks by guaranteeing monotonic lock acquisition:
+    NOTE: Process-local only. Retained for fast unit testing and in-memory mock isolation.
+    Eliminates circular-wait deadlocks within a single Python runtime by acquiring:
     forall A, B : acquire(min(A.id, B.id)) before acquire(max(A.id, B.id)).
     """
 

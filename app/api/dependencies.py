@@ -169,6 +169,7 @@ def get_async_transfer_use_case() -> AsyncExecuteTransferUseCase:
         uow=c.get_postgres_uow(),
         cache=c.cache,
         event_publisher=c.event_publisher,
+        require_idempotency=True,
     )
 
 
