@@ -200,3 +200,82 @@ class IdempotencyRecordModel(Base):
         Index("idx_idempotency_status", "status"),
     )
 
+
+class OutboxEventModel(Base):
+    """Transactional outbox table for reliable, durable domain event publication."""
+
+    __tablename__ = "outbox_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    aggregate_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PENDING"
+    )  # PENDING, PUBLISHED, FAILED, DEAD_LETTER
+    retry_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    locked_until: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_outbox_poll", "status", "created_at"),
+        Index("idx_outbox_lock", "locked_until"),
+    )
+
+
+class ConsumerProcessedEventModel(Base):
+    """Consumer-side deduplication log ensuring exactly-once processing semantics."""
+
+    __tablename__ = "consumer_processed_events"
+
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    consumer_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    processed_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PROCESSED")
+
+
+class ExternalPaymentRecordModel(Base):
+    """Explicit tracking of external provider payment lifecycle and reconciliation state."""
+
+    __tablename__ = "external_payment_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    transaction_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("transactions.id"), nullable=False
+    )
+    provider_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tx_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # SUBMITTED, PENDING_RECONCILIATION, SUCCEEDED, FAILED
+    attempt_count: Mapped[int] = mapped_column(nullable=False, default=1)
+    last_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+

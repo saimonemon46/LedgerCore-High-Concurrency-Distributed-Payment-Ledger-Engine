@@ -12,8 +12,10 @@ from app.domain.value_objects import Currency, Money
 from app.infrastructure.persistence.postgres.models import AccountModel, TransactionModel
 from app.infrastructure.persistence.postgres.repositories import (
     PostgresAccountRepository,
+    PostgresConsumerDeduplicationRepository,
     PostgresIdempotencyRepository,
     PostgresLedgerRepository,
+    PostgresOutboxRepository,
 )
 
 logger = logging.getLogger("ledger_core.uow")
@@ -31,6 +33,8 @@ class PostgresUnitOfWork:
         self._accounts: PostgresAccountRepository | None = None
         self._ledger: PostgresLedgerRepository | None = None
         self._idempotency: PostgresIdempotencyRepository | None = None
+        self._outbox: PostgresOutboxRepository | None = None
+        self._consumer_dedup: PostgresConsumerDeduplicationRepository | None = None
         self._committed: bool = False
 
     async def __aenter__(self) -> Self:
@@ -40,6 +44,8 @@ class PostgresUnitOfWork:
         self._accounts = PostgresAccountRepository(self.session)
         self._ledger = PostgresLedgerRepository(self.session)
         self._idempotency = PostgresIdempotencyRepository(self.session)
+        self._outbox = PostgresOutboxRepository(self.session)
+        self._consumer_dedup = PostgresConsumerDeduplicationRepository(self.session)
         self._committed = False
         return self
 
@@ -65,6 +71,8 @@ class PostgresUnitOfWork:
             self._accounts = None
             self._ledger = None
             self._idempotency = None
+            self._outbox = None
+            self._consumer_dedup = None
 
     @property
     def accounts(self) -> PostgresAccountRepository:
@@ -86,6 +94,20 @@ class PostgresUnitOfWork:
         if self._idempotency is None:
             raise RuntimeError("PostgresUnitOfWork session is not active. Use 'async with uow:'.")
         return self._idempotency
+
+    @property
+    def outbox(self) -> PostgresOutboxRepository:
+        """Provides access to the outbox repository within the active session."""
+        if self._outbox is None:
+            raise RuntimeError("PostgresUnitOfWork session is not active. Use 'async with uow:'.")
+        return self._outbox
+
+    @property
+    def consumer_dedup(self) -> PostgresConsumerDeduplicationRepository:
+        """Provides access to the consumer deduplication repository within the active session."""
+        if self._consumer_dedup is None:
+            raise RuntimeError("PostgresUnitOfWork session is not active. Use 'async with uow:'.")
+        return self._consumer_dedup
 
     async def commit(self) -> None:
         """Commits the active database transaction."""

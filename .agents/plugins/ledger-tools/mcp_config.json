@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ledger-core": {
+      "command": "/home/saimon/Emon_work/project/ledger_core/.venv/bin/python",
+      "args": [
+        "/home/saimon/Emon_work/project/ledger_core/scripts/mcp/ledger_mcp_server.py"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}

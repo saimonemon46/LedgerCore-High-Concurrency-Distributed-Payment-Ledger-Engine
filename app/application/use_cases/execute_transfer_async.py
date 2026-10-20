@@ -268,6 +268,23 @@ class AsyncExecuteTransferUseCase:
                         tenant_id=command.tenant_id,
                     )
 
+                # Persist Transactional Outbox Event inside the identical database transaction
+                await uow.outbox.save_event(
+                    aggregate_id=tx_id,
+                    event_type="transaction.settled",
+                    payload={
+                        "transaction_id": tx_id,
+                        "from_account_id": sender.account_id,
+                        "to_account_id": receiver.account_id,
+                        "amount": str(transfer_amount.amount),
+                        "currency": str(transfer_amount.currency),
+                        "fee": str(fee.amount),
+                        "created_at": now,
+                        "ledger_entry_ids": [e.entry_id for e in entries],
+                        "metadata": command.metadata,
+                    },
+                )
+
                 # Commit atomically!
                 await uow.commit()
 

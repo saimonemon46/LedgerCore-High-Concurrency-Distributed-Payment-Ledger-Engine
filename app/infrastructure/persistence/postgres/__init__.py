@@ -10,25 +10,35 @@ from app.infrastructure.persistence.postgres.database import (
 from app.infrastructure.persistence.postgres.models import (
     AccountModel,
     Base,
+    ConsumerProcessedEventModel,
+    ExternalPaymentRecordModel,
     IdempotencyRecordModel,
     LedgerEntryModel,
+    OutboxEventModel,
     TransactionModel,
 )
 from app.infrastructure.persistence.postgres.repositories import (
     PostgresAccountRepository,
+    PostgresConsumerDeduplicationRepository,
     PostgresIdempotencyRepository,
     PostgresLedgerRepository,
+    PostgresOutboxRepository,
 )
 from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 
 __all__ = [
     "AccountModel",
     "Base",
+    "ConsumerProcessedEventModel",
+    "ExternalPaymentRecordModel",
     "IdempotencyRecordModel",
     "LedgerEntryModel",
+    "OutboxEventModel",
     "PostgresAccountRepository",
+    "PostgresConsumerDeduplicationRepository",
     "PostgresIdempotencyRepository",
     "PostgresLedgerRepository",
+    "PostgresOutboxRepository",
     "PostgresUnitOfWork",
     "TransactionModel",
     "check_db_health",

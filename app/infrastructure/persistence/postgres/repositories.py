@@ -1,10 +1,11 @@
 import logging
 import time
-from datetime import UTC, datetime
+import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +17,12 @@ from app.domain.models import Account, AccountStatus, EntryType, LedgerEntry
 from app.domain.value_objects import Currency, Money
 from app.infrastructure.persistence.postgres.models import (
     AccountModel,
+    ConsumerProcessedEventModel,
     IdempotencyRecordModel,
     LedgerEntryModel,
+    OutboxEventModel,
 )
+from app.ports.outbox_port import IOutboxRepository, OutboxEvent
 
 logger = logging.getLogger("ledger_core.idempotency")
 
@@ -351,4 +355,134 @@ class PostgresIdempotencyRepository:
             record.status = "FAILED"
             record.updated_at = func.now()
             await self.session.flush()
+
+
+class PostgresOutboxRepository(IOutboxRepository):
+    """PostgreSQL implementation of the transactional outbox pattern."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def save_event(
+        self,
+        aggregate_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        event_id: str | None = None,
+    ) -> str:
+        """Persists an outbox event within the active unit-of-work transaction session."""
+        ev_id = event_id or str(uuid.uuid4())
+        record = OutboxEventModel(
+            id=ev_id,
+            aggregate_id=aggregate_id,
+            event_type=event_type,
+            payload=payload,
+            status="PENDING",
+            retry_count=0,
+        )
+        self.session.add(record)
+        await self.session.flush()
+        return ev_id
+
+    async def claim_pending_events(
+        self,
+        batch_size: int = 50,
+        lock_seconds: int = 30,
+    ) -> list[OutboxEvent]:
+        """Atomically claims a batch of pending events using SELECT FOR UPDATE SKIP LOCKED."""
+        now = datetime.now(UTC)
+        lock_until = now + timedelta(seconds=lock_seconds)
+        stmt = (
+            select(OutboxEventModel)
+            .where(
+                OutboxEventModel.status == "PENDING",
+                or_(
+                    OutboxEventModel.locked_until.is_(None),
+                    OutboxEventModel.locked_until < now,
+                ),
+            )
+            .order_by(OutboxEventModel.created_at.asc())
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self.session.execute(stmt)
+        models = list(result.scalars().all())
+        events: list[OutboxEvent] = []
+        for m in models:
+            m.locked_until = lock_until
+            events.append(
+                OutboxEvent(
+                    id=m.id,
+                    aggregate_id=m.aggregate_id,
+                    event_type=m.event_type,
+                    payload=m.payload,
+                    status=m.status,
+                    retry_count=m.retry_count,
+                    created_at=m.created_at,
+                    updated_at=m.updated_at or m.created_at,
+                    locked_until=lock_until,
+                    error_message=m.error_message,
+                )
+            )
+        await self.session.flush()
+        return events
+
+    async def mark_published(self, event_id: str) -> None:
+        """Marks an outbox event as successfully published to the message broker."""
+        stmt = select(OutboxEventModel).where(OutboxEventModel.id == event_id)
+        res = await self.session.execute(stmt)
+        record = res.scalar_one_or_none()
+        if record is not None:
+            record.status = "PUBLISHED"
+            record.locked_until = None
+            record.updated_at = func.now()
+            await self.session.flush()
+
+    async def mark_failed(
+        self,
+        event_id: str,
+        error_message: str,
+        max_retries: int = 5,
+    ) -> None:
+        """Records a publication failure and increments retry count or dead-letters the record."""
+        stmt = select(OutboxEventModel).where(OutboxEventModel.id == event_id)
+        res = await self.session.execute(stmt)
+        record = res.scalar_one_or_none()
+        if record is not None:
+            record.retry_count += 1
+            record.error_message = error_message
+            record.locked_until = None
+            if record.retry_count >= max_retries:
+                record.status = "DEAD_LETTER"
+            else:
+                record.status = "PENDING"
+            record.updated_at = func.now()
+            await self.session.flush()
+
+
+class PostgresConsumerDeduplicationRepository:
+    """Consumer-side deduplication repository ensuring exactly-once processing."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def is_processed(self, event_id: str, consumer_name: str) -> bool:
+        stmt = select(ConsumerProcessedEventModel).where(
+            ConsumerProcessedEventModel.event_id == event_id,
+            ConsumerProcessedEventModel.consumer_name == consumer_name,
+        )
+        res = await self.session.execute(stmt)
+        return res.scalar_one_or_none() is not None
+
+    async def record_processed(
+        self, event_id: str, consumer_name: str, status: str = "PROCESSED"
+    ) -> None:
+        record = ConsumerProcessedEventModel(
+            event_id=event_id,
+            consumer_name=consumer_name,
+            status=status,
+        )
+        self.session.add(record)
+        await self.session.flush()
+
 
