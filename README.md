@@ -4,8 +4,10 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12%2B-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-blueviolet.svg?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/PyTest-126%2F126%20Passed%20(100%25)-success.svg?logo=pytest&logoColor=white)](tests/)
-[![Coverage](https://img.shields.io/badge/Coverage-95%25-brightgreen.svg)](screenshots/test_coverage_report.png)
+[![Tests](https://img.shields.io/badge/PyTest-165%2F165%20Passed%20(100%25)-success.svg?logo=pytest&logoColor=white)](tests/)
+[![Coverage](https://img.shields.io/badge/Coverage-89%25-brightgreen.svg)](screenshots/test_coverage_report.png)
+[![Outbox](https://img.shields.io/badge/Outbox-Transactional%20SKIP%20LOCKED-blue.svg)](app/infrastructure/workers/outbox_relay.py)
+[![Broker](https://img.shields.io/badge/Broker-RabbitMQ%20%7C%20Redis%20Streams-orange.svg)](app/infrastructure/messaging/broker_adapter.py)
 [![Throughput](https://img.shields.io/badge/Locust%20Load-1%2C023.8%20RPS-orange.svg)](screenshots/locust_load_test_report.png)
 [![Torture QPS](https://img.shields.io/badge/Engine%20Torture-6%2C990%2B%20QPS-blueviolet.svg)](screenshots/system_verification_dashboard.png)
 [![Invariant Drift](https://img.shields.io/badge/Mathematical%20Drift-0.00%20USD-00C853.svg)](screenshots/system_verification_dashboard.png)
@@ -15,8 +17,8 @@
 
 > **Architect & Author:** Md. Sai Mon Hasan Emon (Backend & Systems Engineer)  
 > **Target Alignment:** Core Banking Systems, Payment Gateways, High-Throughput Fintech Platforms (bKash, Pathao Pay, Stripe)  
-> **Tech Stack:** Python 3.12+, FastAPI, PostgreSQL, Redis, Docker & Compose, PyTest, Locust, Ruff, Mypy  
-> **Architecture:** Clean / Hexagonal Architecture (Ports & Adapters) with Strict Invariant Enforcement  
+> **Tech Stack:** Python 3.12+, FastAPI, PostgreSQL, Redis, RabbitMQ, Docker & Compose, PyTest, Locust, Ruff, Mypy  
+> **Architecture:** Clean / Hexagonal Architecture (Ports & Adapters) + Transactional Outbox + Durable Messaging  
 
 ---
 
@@ -25,14 +27,15 @@
 2. [Empirical Verification & Benchmark Results](#2-empirical-verification--benchmark-results)
    - [System Verification Dashboard](#21-master-system-verification-dashboard)
    - [Distributed Load Benchmark (Locust 1,023+ RPS)](#22-distributed-load-benchmark-locust)
-   - [Comprehensive Test Coverage (95%)](#23-test-coverage-report-95)
+   - [Comprehensive Test Coverage](#23-test-coverage-report)
    - [Interactive OpenAPI / Swagger Documentation](#24-interactive-api-documentation)
 3. [Core Engineering Guarantees](#3-core-engineering-guarantees)
-4. [High-Level Clean Architecture](#4-high-level-clean-architecture)
-5. [End-to-End Financial Transfer Pipeline](#5-end-to-end-financial-transfer-pipeline)
+4. [High-Level Clean & Extended Architecture](#4-high-level-clean--extended-architecture)
+5. [End-to-End Financial Transfer & Outbox Pipeline](#5-end-to-end-financial-transfer--outbox-pipeline)
 6. [Core CS & Low-Level Design (LLD) Catalog](#6-core-cs--low-level-design-lld-catalog)
 7. [Torture & Concurrency Stress Test Suite](#7-torture--concurrency-stress-test-suite)
-8. [API Reference & Execution Traces](#8-api-reference--execution-traces)
+8. [API Reference, Security & Execution Traces](#8-api-reference-security--execution-traces)
+   - [Security & Distributed Tracing](#84-security-authentication--distributed-tracing)
 9. [Master Documentation Index](#9-master-documentation-index)
 10. [Quickstart & Verification Guide](#10-quickstart--verification-guide)
 11. [Project Structure](#11-project-structure)
@@ -64,14 +67,17 @@ The master verification dashboard provides an end-to-end audit of test suites, c
 #### Key Empirical Metrics from Live Verification:
 | Metric | Value | Verification Mechanism & Guarantee |
 | :--- | :---: | :--- |
-| **Master PyTest Suite** | **126 / 126 (100% Passed)** | 13 test suites executing in **0.94s** without a single failure or flaky run |
-| **Overall Test Coverage** | **95%** | **1,606 / 1,695 statements** covered across domain, application, and infrastructure |
+| **Master PyTest Suite** | **165 / 165 (100% Passed)** | 18 test suites executing with zero flaky runs across domain, UoW, outbox, and broker |
+| **Overall Test Coverage** | **89%** | **2,922 statements** across pure domain, async use cases, outbox relay, and middleware |
 | **Concurrency Torture QPS** | **6,990.05 QPS** | **5,000 bilateral transfers** across **16 concurrent worker threads** (`scripts/run_benchmarks.py`) |
 | **Median Latency (P50)** | **0.083 ms** | Sub-millisecond in-engine execution time under saturated concurrency |
 | **95th Percentile (P95)** | **15.303 ms** | Strict latency boundaries maintained during multi-threaded lock contention |
 | **99th Percentile (P99)** | **22.839 ms** | Tail latency well below production fintech SLAs ($<50\text{ms}$) |
 | **Mathematical Drift** | **0.00 USD** | Continuous ledger auditor confirms strict zero-sum conservation post-torture |
 | **Coffman Deadlocks** | **0 Deadlocks** | Monotonic canonical lock ordering eliminates circular wait entirely |
+| **Transactional Outbox** | **100% Atomic** | Transfer mutations and outbox events commit in 1 PostgreSQL transaction (0 ghost events) |
+| **Consumer Deduplication** | **Exactly-Once** | `consumer_processed_events` suppresses duplicate broker deliveries; routes poison pills to DLQ |
+| **Provider Reconciliation**| **Zero Duplicate Debits** | Network timeouts enter `PENDING_RECONCILIATION`; resolved safely via background status queries |
 
 ---
 
@@ -144,90 +150,108 @@ flowchart LR
 
 ---
 
-## 4. High-Level Clean Architecture
+## 4. High-Level Clean & Extended Architecture
 
-LedgerCore strictly adheres to **Clean / Hexagonal Architecture** (Ports & Adapters). Domain rules have zero dependencies on external frameworks, databases, or transport protocols:
+LedgerCore strictly adheres to **Clean / Hexagonal Architecture** (Ports & Adapters) combined with the **Transactional Outbox Pattern** and **Durable Asynchronous Messaging**. Domain rules have zero dependencies on external frameworks, databases, or transport protocols:
 
 ```mermaid
 flowchart TD
     subgraph Ingress["1. Ingress & HTTP Gateway (FastAPI)"]
-        Client["Mobile App / Merchant"] -->|POST /transfers| Route["Transfers Route (routes/transfers.py)"]
-        Route --> DTO["Pydantic v2 Schemas & Validation"]
+        Client["Client / Merchant"] -->|POST /transfers| Route["Transfers Route (routes/transfers.py)"]
+        Route --> AuthMiddleware["Auth & Correlation Middleware\n(X-API-Key, X-Correlation-ID)"]
+        AuthMiddleware --> DTO["Pydantic v2 Schemas & Validation"]
     end
 
-    subgraph Application["2. Application Layer & Decorators"]
-        DTO --> IdemWrap["@IdempotencyWrapper\n(Atomic UUID Check & Set)"]
-        IdemWrap --> ExecUC["ExecuteTransferUseCase"]
-        ExecUC --> AuditUC["AuditReconciliationUseCase"]
+    subgraph AtomicTx["2. Single Atomic PostgreSQL Transaction Boundary"]
+        DTO --> ExecUC["AsyncExecuteTransferUseCase"]
+        ExecUC --> LockMgr["CanonicalLockManager\n(Monotonic min(A,B) -> max(A,B))"]
+        ExecUC --> Accounts["Accounts (Pessimistic Monotonic Locks)"]
+        ExecUC --> Ledger["Ledger Entries (Balanced Double-Entry)"]
+        ExecUC --> Idemp["Idempotency Record (SETTLED)"]
+        ExecUC --> OutboxTable["Transactional Outbox (PENDING)"]
     end
 
-    subgraph Domain["3. Core Domain Layer (Zero Dependencies)"]
-        ExecUC --> FSM["Transaction State Machine\n(GoF State Pattern)"]
-        ExecUC --> FeeStrat["Fee Strategy Router\n(GoF Strategy Pattern)"]
+    subgraph Domain["3. Pure Domain Layer (Zero Dependencies)"]
+        ExecUC --> FSM["Transaction State Machine (GoF State)"]
+        ExecUC --> FeeStrat["Fee Strategy Router (GoF Strategy)"]
         ExecUC --> Entities["Domain Entities: Account & LedgerEntry"]
         ExecUC --> VO["Value Objects: Money (Decimal) & Currency"]
     end
 
-    subgraph Ports["4. Ports (Abstract Structural Contracts)"]
-        ExecUC -.->|implements| AccPort["AccountRepositoryPort"]
-        ExecUC -.->|implements| LedgPort["LedgerRepositoryPort"]
-        ExecUC -.->|implements| IdemPort["IdempotencyStorePort"]
-        ExecUC -.->|implements| EventPort["EventPublisherPort"]
+    subgraph DurableRelay["4. Durable Outbox Relay & Broker"]
+        OutboxTable -->|SELECT FOR UPDATE SKIP LOCKED| Relay["Outbox Relay Worker\n(workers/outbox_relay.py)"]
+        Relay -->|Publisher Confirms| Broker["Message Broker Adapter\n(RabbitMQ / Redis Streams)"]
+        Relay -->|Mark PUBLISHED| OutboxTable
     end
 
-    subgraph Infrastructure["5. Infrastructure Adapters"]
-        AccPort --> DB["PostgreSQL / In-Memory Repository"]
-        LedgPort --> DB
-        IdemPort --> Redis["Redis / In-Memory Lock Cache"]
-        ExecUC --> LockMgr["CanonicalLockManager\n(Monotonic min(A,B) -> max(A,B))"]
-        EventPort --> WorkerPool["OS Thread Worker Pool\n(Condition Variables & SIGTERM)"]
-        WorkerPool --> CB["3-State Circuit Breaker"]
-        CB --> Webhook["Downstream Webhook / SMS Gateway"]
-        ExecUC --> LRUCache["Custom O(1) LRU Cache\n(Doubly Linked List + TTL)"]
+    subgraph Consumers["5. Idempotent Consumer & DLQ"]
+        Broker --> Consumer["Idempotent Event Consumer\n(workers/idempotent_consumer.py)"]
+        Consumer --> DedupTable{"Check consumer_processed_events"}
+        DedupTable -->|New Event| SideEffect["Downstream Webhook / SMS / Partner"]
+        DedupTable -->|Duplicate| Ack["Idempotent ACK & Discard"]
+        SideEffect -->|Poison Pill / Max Retries| DLQ["Dead-Letter Queue (DLQ)"]
+    end
+
+    subgraph Reconciliation["6. External Provider Reconciliation"]
+        SideEffect --> Provider["External Payment Gateway"]
+        Provider -->|Network Timeout / Drop| PendingState["State: PENDING_RECONCILIATION"]
+        PendingState --> ReconJob["ReconcileProviderTransfersUseCase"]
+        ReconJob -->|Query Idempotency Status| Provider
     end
 ```
 
 ---
 
-## 5. End-to-End Financial Transfer Pipeline
+## 5. End-to-End Financial Transfer & Outbox Pipeline
+
+The financial pipeline is structured in two distinct phases: **Synchronous Atomic Persistence** (guaranteeing zero financial drift) followed by **Durable Asynchronous Delivery** (guaranteeing message survival across process crashes):
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Client as Mobile Client / Merchant
-    participant GW as FastAPI Gateway
-    participant Idem as Idempotency Store (Redis)
-    participant UC as ExecuteTransferUseCase
+    actor Client as Client / Merchant
+    participant GW as FastAPI Gateway (Auth & Tracing)
+    participant UC as AsyncExecuteTransferUseCase
     participant LM as CanonicalLockManager
-    participant DB as Account & Ledger Store
-    participant WP as OS Worker Pool
-    participant CB as Circuit Breaker
-    participant Webhook as Partner Gateway
+    participant DB as PostgreSQL (UoW Transaction)
+    participant Relay as OutboxRelay Worker
+    participant Broker as Message Broker (RabbitMQ / Streams)
+    participant Consumer as IdempotentEventConsumer
+    participant Webhook as Partner Gateway / External Rail
 
-    Client->>GW: POST /api/v1/transfers (Header: Idempotency-Key)
-    GW->>Idem: Atomic Check-and-Set Key (SETNX)
-    alt Key already SETTLED (Retry Storm)
-        Idem-->>GW: Return cached TransferResult
-        GW-->>Client: 200 OK (Instant Idempotent Response)
-    else Key NEW
-        Idem->>Idem: Mark PENDING
-        GW->>UC: Execute TransferCommand
+    Client->>GW: POST /api/v1/transfers (Headers: X-API-Key, X-Correlation-ID, Idempotency-Key)
+    GW->>GW: Validate Merchant Key & Inject Correlation Context
+    GW->>UC: Execute TransferCommand
+
+    rect rgb(240, 248, 255)
+        note over UC,DB: Phase 1: Atomic PostgreSQL Transaction Boundary
         UC->>LM: Acquire Monotonic Locks min(A, B) -> max(A, B)
         LM->>DB: Lock sender & receiver rows (SELECT FOR UPDATE)
         UC->>DB: Validate sender balance >= transfer + fee
-        UC->>DB: Atomic Mutation: Debit Sender, Credit Receiver, Credit Platform Fee
-        UC->>DB: Append Double-Entry Ledger Records (Debit -X, Credit +X)
-        LM->>DB: Release Locks & Commit Transaction
-        UC->>Idem: Cache final TransferResult (Mark SETTLED)
-        UC-->>WP: Publish TransactionSettledEvent
-        WP->>CB: Dispatch Webhook Notification
-        alt Circuit CLOSED
-            CB->>Webhook: Deliver Event (HTTP POST)
-        else Circuit OPEN (Downstream Outage)
-            CB-->>WP: Fail Fast (<1ms) -> Enqueue Priority Retry Heap
+        UC->>DB: Atomic Balance Mutations (Debit Sender, Credit Receiver, Credit Fee)
+        UC->>DB: Append Balanced Ledger Entries (Debit -X, Credit +X)
+        UC->>DB: Mark Idempotency Record SETTLED
+        UC->>DB: Insert OutboxEvent (Status: PENDING)
+        UC->>DB: COMMIT (All 4 Mutations Persisted Atomically)
+    end
+
+    UC-->>GW: TransferResult (SETTLED)
+    GW-->>Client: 201 Created {"status": "SETTLED", "transaction_id": "tx_..."}
+
+    rect rgb(245, 255, 245)
+        note over Relay,Webhook: Phase 2: Durable Asynchronous Delivery & Deduplication
+        Relay->>DB: Poll PENDING Events (SELECT FOR UPDATE SKIP LOCKED)
+        Relay->>Broker: Publish Message (Publisher Confirms)
+        Relay->>DB: Mark OutboxEvent PUBLISHED
+        Broker->>Consumer: Deliver Event Envelope
+        Consumer->>DB: Check consumer_processed_events
+        alt New Event
+            Consumer->>Webhook: Deliver Webhook / External Payout
+            Consumer->>DB: Insert consumer_processed_events (Status: PROCESSED)
+            Consumer-->>Broker: ACK Message
+        else Duplicate Redelivery
+            Consumer-->>Broker: Idempotent ACK (Discard Duplicate, 0 Side Effects)
         end
-        UC-->>GW: TransferResult (SETTLED)
-        GW-->>Client: 200 OK {"status": "SETTLED", "discrepancies": []}
     end
 ```
 
@@ -241,9 +265,15 @@ sequenceDiagram
 | **DSA: Priority Queue** | Binary Min-Heap | $\mathcal{O}(\log N)$ Push/Pop | Scheduled webhook retries with exponential backoff and full jitter. |
 | **DBMS: Concurrency** | Pessimistic Row Locking | $\mathcal{O}(1)$ Lock Check | `SELECT ... FOR UPDATE` eliminates lost updates & double-spending under concurrency. |
 | **DBMS: Deadlock Elimination** | Monotonic Canonical Ordering | $\mathcal{O}(1)$ Key Sort | Sorts account IDs ($\min(A,B) \rightarrow \max(A,B)$); mathematically breaks Coffman circular wait. |
+| **Distributed Systems: Outbox** | Transactional Outbox | $\mathcal{O}(1)$ Insert | Commits domain mutations and event intent in 1 DB transaction; eliminates dual-write failures. |
+| **DBMS: Non-Blocking Polling** | `SELECT ... FOR UPDATE SKIP LOCKED` | $\mathcal{O}(B)$ Batch | Lock-free batch claims across multiple relay worker instances without thread contention. |
+| **Distributed Messaging: Dedup**| Consumer Idempotency Log | $\mathcal{O}(1)$ Lookup | `consumer_processed_events` table converts at-least-once broker delivery into exactly-once effects. |
+| **Fault Tolerance: Quarantine** | Dead-Letter Queue (DLQ) | Bounded Retry | Routes repeatedly failing poison-pill messages to DLQ after exponential backoff retries. |
+| **Resilience: Unknown Recovery**| Provider State Reconciliation | Idempotency Query | Maps external calls to `PENDING_RECONCILIATION` on network timeout; resolves state via background query. |
 | **OS: Multithreading** | OS Worker Pool | $\mathcal{O}(1)$ Wakeup | Worker pool synchronized via `threading.Condition` variables; zero CPU spin-locks. |
 | **OS: Signal Lifecycle** | Linux Signal Interception | Handler | Intercepts `SIGINT` / `SIGTERM` to drain in-flight worker queues without dropping tasks. |
 | **Networks: Idempotency** | Atomic Check-and-Set Lock | $\mathcal{O}(1)$ SETNX | UUIDv4 idempotency key protocol guaranteeing **At-Most-Once** execution. |
+| **Cryptography: Verification** | HMAC SHA-256 Verifier | $\mathcal{O}(N)$ Compare | `hmac.compare_digest` protects inbound provider webhooks from timing attacks. |
 | **Resilience: Circuit Breaker**| 3-State Automaton | $\mathcal{O}(1)$ State Eval | `CLOSED` $\rightarrow$ `OPEN` $\rightarrow$ `HALF-OPEN` failing fast in $<1\text{ms}$ during partner outages. |
 
 ### GoF Design Patterns Mapped to Clean Architecture:
@@ -363,6 +393,32 @@ curl -X POST http://localhost:8000/api/v1/audit/reconcile
 curl -X GET http://localhost:8000/api/v1/health
 ```
 
+#### 6. Authenticated Transfer with Distributed Tracing & Idempotency
+```bash
+curl -X POST http://localhost:8000/api/v1/transfers \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk_live_merchant_alpha" \
+  -H "X-Correlation-ID: cid_trace_8899aabbcc" \
+  -H "Idempotency-Key: e1a4-4740-8b46-399734c76b0c" \
+  -d '{
+    "from_account_id": "ACC-ALICE-001",
+    "to_account_id": "ACC-BOB-002",
+    "amount": "250.00",
+    "currency": "USD"
+  }'
+```
+
+---
+
+### 8.4 Security, Authentication & Distributed Tracing
+
+| Security Layer | Implementation Module | Guarantee & Enforcement |
+| :--- | :--- | :--- |
+| **Merchant Authentication** | [`app/api/middleware/auth_middleware.py`](app/api/middleware/auth_middleware.py) | `X-API-Key` verification mapping callers to scoped tenant identifiers; rejects unauthenticated calls with `401 Unauthorized`. |
+| **Distributed Trace Context**| [`app/api/middleware/correlation_middleware.py`](app/api/middleware/correlation_middleware.py) | Extracts or injects `X-Correlation-ID`, propagating it through Python `contextvars`, structured logs, outbox payloads, and broker message envelopes. |
+| **Cryptographic Webhooks**  | [`app/api/security/webhook_verifier.py`](app/api/security/webhook_verifier.py) | Constant-time HMAC SHA-256 signature verification preventing webhook spoofing and timing attacks. |
+| **Prometheus Observability** | [`app/infrastructure/observability/metrics.py`](app/infrastructure/observability/metrics.py) | Real-time counters tracking settled transfers, outbox publication lag, consumer deduplication counts, and Dead-Letter Queue (DLQ) volume. |
+
 ---
 
 ## 9. Master Documentation Index
@@ -379,8 +435,7 @@ All architectural blueprints, mathematical proofs, and component specifications 
 | 📄 [**05. Testing & Verification Playbook**](./docs/05_TESTING_BENCHMARKING_AND_VERIFICATION.md) | Concurrency torture harness specifications, 50-thread race tests, bilateral deadlock tests, and Locust load testing scripts. |
 | 📄 [**06. End-to-End System Flow Diagrams**](./docs/06_END_TO_END_SYSTEM_FLOW_DIAGRAM.md) | Master sequence diagram, FSM state transitions, canonical lock ordering flowchart, error-handling tree, and sub-15ms latency waterfall. |
 | 🚀 [**07. Implementation Phases Roadmap**](./docs/07_IMPLEMENTATION_PHASES.md) | Phase 0 through Phase 6 execution blueprint detailing deliverables, test suites, and exit criteria. |
-| 📘 [**Transaction Flow Explained**](./TRANSACTION_FLOW_EXPLAINED.md) | Visual step-by-step deep dive into the transaction lifecycle and mathematical audit checks. |
-| 📗 [**Phases Human Explained**](./PHASES_HUMAN_EXPLAINED.md) | Plain-English conversational breakdown of each implementation phase. |
+| 🏛️ [**Architecture & Design Blueprint**](./docs/architecture.md) | High-level system architecture, component topologies, and transactional outbox flow. |
 
 ---
 
@@ -406,8 +461,11 @@ pip install -e ".[dev]"
 
 ### 2. Run Master Test Suite & Coverage
 ```bash
-# Execute all 126 unit, integration, and torture tests
+# Execute all 165 unit, integration, outbox, and torture tests
 pytest -v
+
+# Run extended architecture integration tests (Outbox, Relay, Dedup, DLQ, Reconciliation)
+pytest tests/test_outbox_atomicity.py tests/test_outbox_relay.py tests/test_idempotent_consumer.py tests/test_provider_reconciliation.py tests/test_security_middleware.py -v
 
 # Run with test coverage breakdown
 pytest --cov=app --cov-report=term-missing
@@ -431,7 +489,7 @@ Visit Swagger documentation at: `http://localhost:8000/docs`.
 locust -f locustfile.py --headless -u 200 -r 50 -t 60s --host http://localhost:8000
 ```
 
-### 6. Run with Docker Compose
+### 6. Run Full Stack with Docker Compose (PostgreSQL, Redis & RabbitMQ)
 ```bash
 docker compose up --build
 ```
@@ -442,32 +500,44 @@ docker compose up --build
 
 ```text
 ledger_core/
+├── .agents/                           # Antigravity AI Customizations
+│   ├── plugins/ledger-tools/          # LedgerCore MCP Plugin & Configuration
+│   └── skills/ledger-audit/           # Progressive Disclosure Ledger Invariant Audit Skill
 ├── app/
 │   ├── api/                           # Ingress Layer (FastAPI)
+│   │   ├── middleware/                # Security & Tracing (AuthMiddleware, CorrelationIdMiddleware)
 │   │   ├── routes/                    # API Route Handlers (accounts, transfers, audit, health)
+│   │   ├── security/                  # Cryptographic Webhook Origin Verifiers (HMAC SHA-256)
 │   │   ├── dependencies.py            # Dependency Injection Providers
-│   │   ├── main.py                    # Application Entrypoint & Middleware
+│   │   ├── main.py                    # Application Entrypoint & Middleware Pipeline
 │   │   └── schemas.py                 # Pydantic v2 Request/Response DTOs
 │   ├── application/                   # Application Use Cases & Decorators
 │   │   ├── decorators/                # Cross-Cutting Decorators (Idempotency, Circuit Breaker)
-│   │   ├── use_cases/                 # Core Business Workflows (ExecuteTransfer, AuditReconcile)
+│   │   ├── use_cases/                 # Core Business Workflows (ExecuteTransfer, ReconcileProvider)
 │   │   └── exceptions.py              # Application-Specific Exceptions
-│   ├── domain/                        # Pure Domain Layer (Zero Dependencies)
+│   ├── domain/                        # Pure Domain Layer (Zero Dependencies, Zero I/O)
 │   │   ├── strategies/                # GoF Strategy Pattern (Fee Calculation Algorithms)
 │   │   ├── models.py                  # Domain Entities (Account, LedgerEntry, Transaction)
 │   │   ├── state_machine.py           # GoF State Pattern (Transaction Lifecycle FSM)
 │   │   ├── value_objects.py           # Immutable Value Objects (Money, Currency)
 │   │   └── exceptions.py              # Pure Domain Invariant Exceptions
 │   ├── infrastructure/                # Secondary Adapters
+│   │   ├── adapters/                  # External Payment Provider Adapters (MockPaymentProvider)
 │   │   ├── concurrency/               # CanonicalLockManager (Deadlock Elimination)
 │   │   ├── dsa/                       # Custom Data Structures (O(1) LRU Cache, Min-Heap)
+│   │   ├── messaging/                 # Message Broker Adapters (DurableMemoryBroker, RedisStreams)
+│   │   ├── observability/             # Real-time Metrics & Prometheus Observability
 │   │   ├── os_threading/              # OS Worker Pool & SIGTERM Interception
-│   │   ├── persistence/               # Memory & Database Repositories
-│   │   └── resilience/                # 3-State Resilient Circuit Breaker
+│   │   ├── persistence/               # PostgreSQL & In-Memory Repositories (Unit of Work)
+│   │   ├── resilience/                # 3-State Resilient Circuit Breaker
+│   │   └── workers/                   # Background Daemons (OutboxRelay, IdempotentEventConsumer)
 │   └── ports/                         # Abstract Structural Contracts (Hexagonal Ports)
 │       ├── cache_port.py              # Cache Abstraction
 │       ├── event_publisher_port.py    # Event Broker Abstraction
 │       ├── idempotency_port.py        # Idempotency Store Abstraction
+│       ├── message_broker_port.py     # Message Broker Abstraction (RabbitMQ / Streams)
+│       ├── outbox_port.py             # Transactional Outbox Abstraction
+│       ├── payment_provider_port.py   # External Payment Provider Abstraction
 │       └── repository_ports.py        # Account & Ledger Repository Abstractions
 ├── benchmarks/                        # Performance Benchmarking Harnesses
 ├── docs/                              # Comprehensive Architectural & Interview Manuals
@@ -477,19 +547,29 @@ ledger_core/
 │   ├── test_coverage_report.png
 │   └── swagger_docs.png
 ├── scripts/
-│   └── run_benchmarks.py              # Multi-Threaded Concurrency Torture Runner
-├── tests/                             # Master PyTest Test Suite (126 Tests)
+│   ├── mcp/                           # Model Context Protocol (MCP) Tools Server
+│   ├── run_benchmarks.py              # Multi-Threaded Concurrency Torture Runner
+│   ├── verify_phase1.py               # Phase 1 Verification Script
+│   └── verify_phase2.py               # Phase 2 Verification Script
+├── tests/                             # Master PyTest Test Suite (165 Tests - 100% Passed)
 │   ├── test_api.py
 │   ├── test_circuit_breaker.py
 │   ├── test_concurrency_lock_manager.py
 │   ├── test_decorators.py
 │   ├── test_domain_invariants.py
 │   ├── test_dsa_lru_cache.py
+│   ├── test_idempotent_consumer.py    # Consumer Deduplication & DLQ Routing Tests
 │   ├── test_memory_repositories.py
+│   ├── test_outbox_atomicity.py       # Transactional Outbox Atomic Commit & Rollback Tests
+│   ├── test_outbox_relay.py           # Outbox Relay Worker & SKIP LOCKED Crash Recovery
 │   ├── test_ports_contracts.py
+│   ├── test_postgres_idempotency.py
+│   ├── test_postgres_unit_of_work.py
 │   ├── test_priority_retry_heap.py
+│   ├── test_provider_reconciliation.py# External Provider Timeout & Reconciliation Tests
 │   ├── test_scaffolding.py
-│   ├── test_torture_concurrency.py   # 50-Thread Double-Spend & Deadlock Torture
+│   ├── test_security_middleware.py    # Merchant API Key, HMAC & Correlation ID Tests
+│   ├── test_torture_concurrency.py    # 50-Thread Double-Spend & Deadlock Torture
 │   ├── test_use_cases.py
 │   └── test_worker_pool.py
 ├── docker-compose.yml
