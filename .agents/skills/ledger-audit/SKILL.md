@@ -35,7 +35,7 @@ Run the provided helper script:
 ### Step 2: Run Unit Invariant Tests
 Directly test domain-level conservation:
 ```bash
-.venv/bin/pytest tests/unit/domain/test_money.py tests/unit/domain/test_journal_entry.py -v
+.venv/bin/pytest tests/test_domain_invariants.py -v
 ```
 
 ### Step 3: Check Database Drift

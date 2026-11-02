@@ -5,12 +5,12 @@ Communicates over stdio using JSON-RPC 2.0 to expose ledger verification,
 database health, and balance conservation tools to AI agents.
 """
 
-from decimal import Decimal
 import json
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List
+from decimal import Decimal
+from typing import Any
 
 
 def log(msg: str) -> None:
@@ -18,42 +18,48 @@ def log(msg: str) -> None:
     sys.stderr.flush()
 
 
-def send_response(response: Dict[str, Any]) -> None:
+def send_response(response: dict[str, Any]) -> None:
     data = json.dumps(response)
     sys.stdout.write(f"{data}\n")
     sys.stdout.flush()
 
 
-TOOLS: List[Dict[str, Any]] = [
+TOOLS: list[dict[str, Any]] = [
     {
         "name": "verify_balance_math",
-        "description": "Verify double-entry balance: ensures sum of debits strictly equals sum of credits with 2-decimal precision.",
+        "description": (
+            "Verify double-entry balance: ensures sum of debits strictly equals "
+            "sum of credits with 2-decimal precision."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "debits": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of debit amounts as strings (e.g. ['100.00', '2.50'])"
+                    "description": "List of debit amounts as strings (e.g. ['100.00', '2.50'])",
                 },
                 "credits": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of credit amounts as strings (e.g. ['102.50'])"
-                }
+                    "description": "List of credit amounts as strings (e.g. ['102.50'])",
+                },
             },
-            "required": ["debits", "credits"]
-        }
+            "required": ["debits", "credits"],
+        },
     },
     {
         "name": "run_domain_invariant_tests",
-        "description": "Runs pytest unit tests covering domain money, journal entries, and mathematical conservation.",
+        "description": (
+            "Runs pytest unit tests covering domain money, journal entries, "
+            "and mathematical conservation."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {},
-            "required": []
-        }
-    }
+            "required": [],
+        },
+    },
 ]
 
 
@@ -84,7 +90,7 @@ def handle_tools_list(request_id: Any) -> None:
     })
 
 
-def tool_verify_balance_math(args: Dict[str, Any]) -> str:
+def tool_verify_balance_math(args: dict[str, Any]) -> str:
     try:
         debits = [Decimal(str(x)) for x in args.get("debits", [])]
         credits = [Decimal(str(x)) for x in args.get("credits", [])]
@@ -111,7 +117,7 @@ def tool_run_domain_tests() -> str:
 
     try:
         res = subprocess.run(
-            [pytest_bin, "tests/unit/domain/", "-q"],
+            [pytest_bin, "tests/test_domain_invariants.py", "-q"],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -122,7 +128,7 @@ def tool_run_domain_tests() -> str:
         return f"Error running tests: {e}"
 
 
-def handle_tools_call(request_id: Any, params: Dict[str, Any]) -> None:
+def handle_tools_call(request_id: Any, params: dict[str, Any]) -> None:
     name = params.get("name")
     args = params.get("arguments", {})
 

@@ -8,6 +8,7 @@ Verifies:
 
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from sqlalchemy import select, text
@@ -128,7 +129,7 @@ class TestOutboxRelay:
         """Proves repeated broker failure transitions outbox row to DEAD_LETTER status."""
 
         class FailingBroker(DurableMemoryBroker):
-            async def publish(self, *args, **kwargs) -> bool:
+            async def publish(self, *args: Any, **kwargs: Any) -> bool:
                 raise ConnectionError("Simulated network drop to message broker")
 
         failing_broker = FailingBroker()
