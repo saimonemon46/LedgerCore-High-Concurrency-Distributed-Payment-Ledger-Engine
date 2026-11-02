@@ -43,7 +43,7 @@ python scripts/verify_phase2.py
 
 ## Testing & Quality Assurance Commands
 ```bash
-# Run complete test suite (149 tests)
+# Run complete test suite (165 tests)
 pytest
 
 # Run tests with coverage report
