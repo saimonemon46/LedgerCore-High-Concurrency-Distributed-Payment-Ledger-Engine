@@ -9,7 +9,14 @@ import json
 import os
 import subprocess
 import sys
-from decimal import Decimal
+from decimal import (
+    MAX_EMAX,
+    MAX_PREC,
+    MIN_EMIN,
+    Context,
+    Decimal,
+    localcontext,
+)
 from typing import Any
 
 
@@ -90,23 +97,45 @@ def handle_tools_list(request_id: Any) -> None:
     })
 
 
+MAX_ADJUSTED_EXPONENT = 30
+
+
+def _parse_amount(raw: Any, *, allow_negative: bool = True) -> Decimal:
+    value = Decimal(str(raw))
+    if not value.is_finite():
+        raise ValueError(f"non-finite amount '{raw}'")
+    if value.adjusted() > MAX_ADJUSTED_EXPONENT:
+        raise ValueError(f"amount too large '{raw}'")
+    exponent = value.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -2:
+        raise ValueError(f"excess decimal scale (max 2 allowed) '{raw}'")
+    if not allow_negative and value < Decimal("0.00"):
+        raise ValueError(f"credit amounts must be positive '{raw}'")
+    return value
+
+
 def tool_verify_balance_math(args: dict[str, Any]) -> str:
     try:
-        debits = [Decimal(str(x)) for x in args.get("debits", [])]
-        credits = [Decimal(str(x)) for x in args.get("credits", [])]
+        raw_debits = args.get("debits", [])
+        raw_credits = args.get("credits", [])
+
+        debits = [_parse_amount(x) for x in raw_debits]
+        credits = [_parse_amount(x, allow_negative=False) for x in raw_credits]
+
+        with localcontext(Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN)):
+            sum_debits = sum((abs(d) for d in debits), Decimal("0.00"))
+            sum_credits = sum(credits, Decimal("0.00"))
+            drift = sum_debits - sum_credits
+            balanced = (drift == Decimal("0.00"))
+
+        return (
+            f"Sum Debits: {sum_debits:.2f}\n"
+            f"Sum Credits: {sum_credits:.2f}\n"
+            f"Drift: {drift:.2f}\n"
+            f"Balanced: {'YES (Double-entry invariant holds)' if balanced else 'NO (VIOLATION)'}"
+        )
     except Exception as e:
         return f"Invalid decimal input: {e}"
-
-    sum_debits = sum(debits, Decimal("0.00"))
-    sum_credits = sum(credits, Decimal("0.00"))
-    balanced = (sum_debits == sum_credits)
-
-    return (
-        f"Sum Debits: {sum_debits}\n"
-        f"Sum Credits: {sum_credits}\n"
-        f"Drift: {sum_debits - sum_credits}\n"
-        f"Balanced: {'YES (Double-entry invariant holds)' if balanced else 'NO (VIOLATION)'}"
-    )
 
 
 def tool_run_domain_tests() -> str:

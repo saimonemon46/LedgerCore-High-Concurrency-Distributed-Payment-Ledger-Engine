@@ -124,7 +124,10 @@ class TransactionStateMachine:
         return self._current_state.state_name
 
     def can_transition_to(self, target: TransactionState | str) -> bool:
-        resolved = TransactionState(target) if isinstance(target, str) else target
+        try:
+            resolved = TransactionState(target) if isinstance(target, str) else target
+        except ValueError:
+            return False
         return self._current_state.can_transition_to(resolved)
 
     def transition_to(self, target: TransactionState | str) -> None:

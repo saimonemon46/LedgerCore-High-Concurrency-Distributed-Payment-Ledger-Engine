@@ -38,11 +38,11 @@ Whenever you write, refactor, or review financial ledger code, you **must strict
   - Result: Postgres `40P01` deadlock or worker thread starvation.
 - **The Monotonic Rule:** Always sort account identifiers lexicographically or numerically before acquiring row locks or mutexes:
   ```python
-  # Always lock in canonical sorted order:
-  first_id, second_id = sorted([from_account_id, to_account_id])
-  async with lock(first_id):
-      async with lock(second_id):
-          # Mutate balances safely without deadlock risk
+  # Reject from_account_id == to_account_id before locking.
+  # Deduplicate and sort all involved accounts (including fee account when charged):
+  ordered_ids = sorted({from_account_id, to_account_id, *( [fee_account_id] if fee_account_id else [] )})
+  async with acquire_locks(ordered_ids):
+      # Mutate balances safely without deadlock risk
   ```
 - See formal proof in [references/02_deadlock_elimination.md](./references/02_deadlock_elimination.md).
 
