@@ -48,7 +48,7 @@ def compute_request_hash(
 def compute_transfer_fingerprint(
     from_account_id: str,
     to_account_id: str,
-    amount: Decimal | str | float,
+    amount: Decimal | str,
     currency: str,
     tenant_id: str = "default",
 ) -> str:
@@ -69,7 +69,7 @@ def compute_transfer_fingerprint(
 def compute_transfer_command_hash(
     from_account_id: str,
     to_account_id: str,
-    amount: Decimal | str | float,
+    amount: Decimal | str,
     currency: str,
     fee_account_id: str | None = None,
     metadata: dict[str, Any] | None = None,

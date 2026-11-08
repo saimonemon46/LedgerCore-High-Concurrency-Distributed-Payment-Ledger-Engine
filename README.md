@@ -27,7 +27,7 @@
 2. [Empirical Verification & Benchmark Results](#2-empirical-verification--benchmark-results)
    - [System Verification Dashboard](#21-master-system-verification-dashboard)
    - [Distributed Load Benchmark (Locust 1,023+ RPS)](#22-distributed-load-benchmark-locust)
-   - [Comprehensive Test Coverage](#23-test-coverage-report)
+   - [Comprehensive Test Coverage](#23-test-coverage-report-89)
    - [Interactive OpenAPI / Swagger Documentation](#24-interactive-api-documentation)
 3. [Core Engineering Guarantees](#3-core-engineering-guarantees)
 4. [High-Level Clean & Extended Architecture](#4-high-level-clean--extended-architecture)
@@ -69,7 +69,7 @@ The master verification dashboard provides an end-to-end audit of test suites, c
 #### Key Empirical Metrics from Live Verification:
 | Metric | Value | Verification Mechanism & Guarantee |
 | :--- | :---: | :--- |
-| **Master PyTest Suite** | **165 / 165 (100% Passed)** | 18 test suites executing with zero flaky runs across domain, UoW, outbox, and broker |
+| **Master PyTest Suite** | **165 / 165 (100% Passed)** | 20 test suites executing with zero flaky runs across domain, UoW, outbox, and broker |
 | **Overall Test Coverage** | **89%** | **2,922 statements** across pure domain, async use cases, outbox relay, and middleware |
 | **Concurrency Torture QPS** | **6,990.05 QPS** | **5,000 bilateral transfers** across **16 concurrent worker threads** (`scripts/run_benchmarks.py`) |
 | **Median Latency (P50)** | **0.083 ms** | Sub-millisecond in-engine execution time under saturated concurrency |
@@ -78,8 +78,8 @@ The master verification dashboard provides an end-to-end audit of test suites, c
 | **Mathematical Drift** | **0.00 USD** | Continuous ledger auditor confirms strict zero-sum conservation post-torture |
 | **Coffman Deadlocks** | **0 Deadlocks** | Monotonic canonical lock ordering eliminates circular wait entirely |
 | **Transactional Outbox** | **100% Atomic** | Transfer mutations and outbox events commit in 1 PostgreSQL transaction (0 ghost events) |
-| **Consumer Deduplication** | **At-Least-Once Broker / Exactly-Once Effects** | At-least-once broker delivery with `consumer_processed_events` suppression; partner idempotency ensures exactly-once external effects |
-| **Provider Reconciliation**| **Zero Duplicate Debits** | Network timeouts enter `PENDING_RECONCILIATION`; resolved safely via background status queries with partner idempotency |
+| **Consumer Deduplication** | **At-Least-Once (Partner Idempotent Effects)** | At-least-once broker delivery with `consumer_processed_events` suppression; exactly-once effects conditioned on partner idempotency |
+| **Provider Reconciliation**| **At-Least-Once (Zero Duplicate Debits with Partner Idempotency)** | Network timeouts enter `PENDING_RECONCILIATION`; resolved safely via background status queries with partner idempotency |
 
 ---
 
@@ -233,7 +233,7 @@ sequenceDiagram
         LM->>DB: Lock sender & receiver rows (SELECT FOR UPDATE)
         UC->>DB: Validate sender balance >= transfer + fee
         UC->>DB: Atomic Balance Mutations (Debit Sender, Credit Receiver, Credit Fee)
-        UC->>DB: Append Balanced Ledger Entries (Debit -X, Credit +X)
+        UC->>DB: Append Balanced Ledger Entries (Debit -(X + Fee), Credit +X, Credit +Fee)
         UC->>DB: Mark Idempotency Record SETTLED
         UC->>DB: Insert OutboxEvent (Status: PENDING)
         UC->>DB: COMMIT (All 4 Mutations Persisted Atomically)
@@ -345,6 +345,7 @@ curl -X GET http://localhost:8000/api/v1/accounts/ACC-ALICE-001/balance
 ```bash
 curl -X POST http://localhost:8000/api/v1/transfers \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: sk_live_merchant_default" \
   -H "Idempotency-Key: 2bfb8e5b-e1a4-4740-8b46-399734c76b0c" \
   -d '{
     "from_account_id": "ACC-ALICE-001",
@@ -508,7 +509,9 @@ docker compose up --build
 ledger_core/
 ├── .agents/                           # Antigravity AI Customizations
 │   ├── plugins/ledger-tools/          # LedgerCore MCP Plugin & Configuration
-│   └── skills/ledger-audit/           # Progressive Disclosure Ledger Invariant Audit Skill
+│   └── skills/
+│       ├── ledger-audit/              # Progressive Disclosure Ledger Invariant Audit Skill
+│       └── ledger-core-domain/        # Double-Entry Invariants, Antipattern Scanners & Templates
 ├── app/
 │   ├── api/                           # Ingress Layer (FastAPI)
 │   │   ├── middleware/                # Security & Tracing (AuthMiddleware, CorrelationIdMiddleware)

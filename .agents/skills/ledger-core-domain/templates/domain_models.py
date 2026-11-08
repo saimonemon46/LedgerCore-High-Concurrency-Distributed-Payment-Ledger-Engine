@@ -144,6 +144,9 @@ class Transaction:
     amount: Money
     fee: Money = field(default_factory=lambda: Money(Decimal("0.00")))
     status: str = "INITIATED"
+    fee_account_id: str | None = None
+    currency: str = "USD"
+    idempotency_key: str = ""
     entries: list[LedgerEntry] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 

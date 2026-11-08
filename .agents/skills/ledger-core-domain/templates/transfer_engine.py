@@ -14,9 +14,11 @@ from decimal import Decimal
 
 try:
     from .domain_models import Account, LedgerEntry, Transaction
+    from .state_machine import TransactionStateMachine
     from .value_objects import Money
 except ImportError:
     from domain_models import Account, LedgerEntry, Transaction  # type: ignore[no-redef]
+    from state_machine import TransactionStateMachine  # type: ignore[no-redef]
     from value_objects import Money  # type: ignore[no-redef]
 
 
@@ -33,6 +35,7 @@ class TransferEngine:
         from_account: Account,
         to_account: Account,
         amount: Money,
+        idempotency_key: str,
         fee_account: Account | None = None,
         fee_amount: Money | None = None,
     ) -> Transaction:
@@ -43,6 +46,9 @@ class TransferEngine:
         - Sum(Debits) + Sum(Credits) == 0.00.
         - Negative balances prevented unless explicit overdraft allowed.
         """
+        if not idempotency_key or not idempotency_key.strip():
+            raise ValueError("idempotency_key is required and cannot be empty.")
+
         # 1. Self-transfer check
         if from_account.account_id == to_account.account_id:
             raise ValueError("Self-transfers between identical accounts are not permitted.")
@@ -57,7 +63,11 @@ class TransferEngine:
 
         canonical_locks = self.get_canonical_lock_order(account_ids)
 
-        # 3. Acquire locks in canonical sorted order
+        # 3. State machine initialization: INITIATED -> LOCKED
+        sm = TransactionStateMachine()
+        sm.transition_to("LOCKED")
+
+        # 4. Acquire locks in canonical sorted order
         # (In real Postgres implementation: SELECT ... FOR UPDATE WHERE id IN (...) ORDER BY id ASC)
         async with self._acquire_locks(canonical_locks):
             tx_id = str(uuid.uuid4())
@@ -111,20 +121,27 @@ class TransferEngine:
                         )
                     )
 
+                # State machine transition: LOCKED -> COMMITTED -> SETTLED
+                sm.transition_to("COMMITTED")
+                sm.transition_to("SETTLED")
+
                 transaction = Transaction(
                     transaction_id=tx_id,
                     from_account_id=from_account.account_id,
                     to_account_id=to_account.account_id,
                     amount=amount,
                     fee=actual_fee,
-                    status="SETTLED",
+                    status=sm.current_state.value,
+                    fee_account_id=fee_account.account_id if fee_account and actual_fee.is_positive() else None,
+                    currency=amount.currency,
+                    idempotency_key=idempotency_key,
                     entries=entries,
                 )
 
                 # Strict conservation assertion before commit
                 transaction.verify_double_entry_balance()
                 return transaction
-            except Exception:
+            except BaseException:
                 for acc, balance in snapshots:
                     acc.balance = balance
                 raise

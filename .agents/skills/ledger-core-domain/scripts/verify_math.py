@@ -6,16 +6,20 @@ and verifies mathematical zero-drift conservation.
 """
 
 import argparse
+import os
 import sys
 from decimal import (
-    MAX_EMAX,
-    MAX_PREC,
-    MIN_EMIN,
-    Context,
     Decimal,
     InvalidOperation,
-    localcontext,
 )
+
+# Ensure repository root is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
+
+try:
+    from app.domain.value_objects import Money
+except ImportError:
+    from templates.value_objects import Money  # type: ignore[no-redef]
 
 MAX_ADJUSTED_EXPONENT = 30
 
@@ -34,7 +38,11 @@ def _parse(values: list[str]) -> list[Decimal]:
     return parsed
 
 
-def verify_balance(debits: list[str], credits: list[str]) -> tuple[bool, Decimal, Decimal, Decimal]:
+def verify_balance(
+    debits: list[str],
+    credits: list[str],
+    currency: str = "USD",
+) -> tuple[bool, Money, Money, Money]:
     dec_debits = _parse(debits)
     dec_credits = _parse(credits)
 
@@ -44,13 +52,18 @@ def verify_balance(debits: list[str], credits: list[str]) -> tuple[bool, Decimal
             raise InvalidOperation(f"credit amounts must be positive: {c}")
 
     # Debits can be provided either as signed negative entries (-100.00)
-    # or unsigned magnitudes (100.00)
-    # Calculate sums and drift under full precision context to prevent false zero-drift
-    with localcontext(Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN)):
-        sum_debits = sum((abs(d) for d in dec_debits), Decimal("0.00"))
-        sum_credits = sum(dec_credits, Decimal("0.00"))
-        drift = sum_debits - sum_credits
-        balanced = (drift == Decimal("0.00"))
+    # or unsigned magnitudes (100.00). Use Money value object for exact calculation.
+    zero_money = Money(Decimal("0.00"), currency)
+    sum_debits = zero_money
+    for d in dec_debits:
+        sum_debits = sum_debits.add(Money(abs(d), currency))
+
+    sum_credits = zero_money
+    for c in dec_credits:
+        sum_credits = sum_credits.add(Money(c, currency))
+
+    drift = sum_debits.subtract(sum_credits)
+    balanced = drift.is_zero()
 
     return balanced, sum_debits, sum_credits, drift
 
@@ -80,9 +93,9 @@ def main() -> None:
         print(f"❌ INVALID INPUT: {exc}", file=sys.stderr)
         sys.exit(2)
 
-    print(f"Total Debits:  {sum_debits:.2f}")
-    print(f"Total Credits: {sum_credits:.2f}")
-    print(f"Net Drift:     {drift:.2f}")
+    print(f"Total Debits:  {sum_debits.amount:.2f}")
+    print(f"Total Credits: {sum_credits.amount:.2f}")
+    print(f"Net Drift:     {drift.amount:.2f}")
 
     if balanced:
         print("✅ BALANCED: Double-entry conservation invariant holds (drift = 0.00).")

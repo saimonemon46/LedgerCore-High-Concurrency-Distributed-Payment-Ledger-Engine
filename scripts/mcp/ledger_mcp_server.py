@@ -100,34 +100,27 @@ def handle_tools_list(request_id: Any) -> None:
 MAX_ADJUSTED_EXPONENT = 30
 
 
+def _parse_amount(raw: Any, *, allow_negative: bool = True) -> Decimal:
+    value = Decimal(str(raw))
+    if not value.is_finite():
+        raise ValueError(f"non-finite amount '{raw}'")
+    if value.adjusted() > MAX_ADJUSTED_EXPONENT:
+        raise ValueError(f"amount too large '{raw}'")
+    exponent = value.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -2:
+        raise ValueError(f"excess decimal scale (max 2 allowed) '{raw}'")
+    if not allow_negative and value < Decimal("0.00"):
+        raise ValueError(f"credit amounts must be positive '{raw}'")
+    return value
+
+
 def tool_verify_balance_math(args: dict[str, Any]) -> str:
     try:
         raw_debits = args.get("debits", [])
         raw_credits = args.get("credits", [])
 
-        debits = []
-        for x in raw_debits:
-            d = Decimal(str(x))
-            if not d.is_finite():
-                return f"Invalid decimal input: non-finite amount '{x}'"
-            if d.adjusted() > MAX_ADJUSTED_EXPONENT:
-                return f"Invalid decimal input: amount too large '{x}'"
-            if isinstance(d.as_tuple().exponent, int) and d.as_tuple().exponent < -2:
-                return f"Invalid decimal input: excess decimal scale (max 2 allowed) '{x}'"
-            debits.append(d)
-
-        credits = []
-        for x in raw_credits:
-            c = Decimal(str(x))
-            if not c.is_finite():
-                return f"Invalid decimal input: non-finite amount '{x}'"
-            if c.adjusted() > MAX_ADJUSTED_EXPONENT:
-                return f"Invalid decimal input: amount too large '{x}'"
-            if isinstance(c.as_tuple().exponent, int) and c.as_tuple().exponent < -2:
-                return f"Invalid decimal input: excess decimal scale (max 2 allowed) '{x}'"
-            if c < Decimal("0.00"):
-                return f"Invalid decimal input: credit amounts must be positive '{x}'"
-            credits.append(c)
+        debits = [_parse_amount(x) for x in raw_debits]
+        credits = [_parse_amount(x, allow_negative=False) for x in raw_credits]
 
         with localcontext(Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN)):
             sum_debits = sum((abs(d) for d in debits), Decimal("0.00"))
