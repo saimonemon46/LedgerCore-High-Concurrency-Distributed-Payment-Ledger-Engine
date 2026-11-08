@@ -47,6 +47,9 @@ class TransferEngine:
         if from_account.account_id == to_account.account_id:
             raise ValueError("Self-transfers between identical accounts are not permitted.")
 
+        if fee_amount is not None and fee_amount.is_positive() and fee_account is None:
+            raise ValueError("fee_account is required when fee_amount is positive.")
+
         # 2. Canonical lock order calculation
         account_ids = [from_account.account_id, to_account.account_id]
         if fee_account and fee_amount and fee_amount.is_positive():
@@ -67,54 +70,64 @@ class TransferEngine:
             if fee_account and actual_fee.is_positive():
                 total_debit = amount.add(actual_fee)
 
-            # Solvency check & mutations
-            from_account.debit(total_debit)
-            to_account.credit(amount)
-            if fee_account and actual_fee.is_positive():
-                fee_account.credit(actual_fee)
-
-            # Generate balanced immutable ledger entries
-            entries = [
-                LedgerEntry.create_debit(
-                    entry_id=str(uuid.uuid4()),
-                    transaction_id=tx_id,
-                    account_id=from_account.account_id,
-                    amount=total_debit,
-                    balance_after=from_account.balance,
-                ),
-                LedgerEntry.create_credit(
-                    entry_id=str(uuid.uuid4()),
-                    transaction_id=tx_id,
-                    account_id=to_account.account_id,
-                    amount=amount,
-                    balance_after=to_account.balance,
-                ),
+            # Solvency check, mutations & pre-commit validation with rollback protection
+            snapshots = [
+                (acc, acc.balance)
+                for acc in (from_account, to_account, fee_account)
+                if acc is not None
             ]
+            try:
+                from_account.debit(total_debit)
+                to_account.credit(amount)
+                if fee_account and actual_fee.is_positive():
+                    fee_account.credit(actual_fee)
 
-            if fee_account and actual_fee.is_positive():
-                entries.append(
+                # Generate balanced immutable ledger entries
+                entries = [
+                    LedgerEntry.create_debit(
+                        entry_id=str(uuid.uuid4()),
+                        transaction_id=tx_id,
+                        account_id=from_account.account_id,
+                        amount=total_debit,
+                        balance_after=from_account.balance,
+                    ),
                     LedgerEntry.create_credit(
                         entry_id=str(uuid.uuid4()),
                         transaction_id=tx_id,
-                        account_id=fee_account.account_id,
-                        amount=actual_fee,
-                        balance_after=fee_account.balance,
+                        account_id=to_account.account_id,
+                        amount=amount,
+                        balance_after=to_account.balance,
+                    ),
+                ]
+
+                if fee_account and actual_fee.is_positive():
+                    entries.append(
+                        LedgerEntry.create_credit(
+                            entry_id=str(uuid.uuid4()),
+                            transaction_id=tx_id,
+                            account_id=fee_account.account_id,
+                            amount=actual_fee,
+                            balance_after=fee_account.balance,
+                        )
                     )
+
+                transaction = Transaction(
+                    transaction_id=tx_id,
+                    from_account_id=from_account.account_id,
+                    to_account_id=to_account.account_id,
+                    amount=amount,
+                    fee=actual_fee,
+                    status="SETTLED",
+                    entries=entries,
                 )
 
-            transaction = Transaction(
-                transaction_id=tx_id,
-                from_account_id=from_account.account_id,
-                to_account_id=to_account.account_id,
-                amount=amount,
-                fee=actual_fee,
-                status="SETTLED",
-                entries=entries,
-            )
-
-            # Strict conservation assertion before commit
-            transaction.verify_double_entry_balance()
-            return transaction
+                # Strict conservation assertion before commit
+                transaction.verify_double_entry_balance()
+                return transaction
+            except Exception:
+                for acc, balance in snapshots:
+                    acc.balance = balance
+                raise
 
     @asynccontextmanager
     async def _acquire_locks(self, ordered_ids: list[str]) -> AsyncGenerator[None, None]:

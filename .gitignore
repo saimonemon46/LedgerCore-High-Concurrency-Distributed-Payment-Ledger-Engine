@@ -64,3 +64,7 @@ Thumbs.db
 PHASES_HUMAN_EXPLAINED.md
 TRANSACTION_FLOW_EXPLAINED.md
 flow.md
+
+# Generated reports & benchmarks
+screenshots/*.html
+reports/

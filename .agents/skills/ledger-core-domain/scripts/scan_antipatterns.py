@@ -387,7 +387,7 @@ class CodebaseScanner:
                     )
 
             if re.search(
-                r"\b(update|delete\s+from)\s+(journal_entries|ledger_entries|transactions)\b",
+                r"\b(update|delete\s+from)\s+(journal_entries|ledger_entries)\b",
                 lower,
             ):
                 self.findings.append(

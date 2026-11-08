@@ -34,7 +34,7 @@
 5. [End-to-End Financial Transfer & Outbox Pipeline](#5-end-to-end-financial-transfer--outbox-pipeline)
 6. [Core CS & Low-Level Design (LLD) Catalog](#6-core-cs--low-level-design-lld-catalog)
 7. [Torture & Concurrency Stress Test Suite](#7-torture--concurrency-stress-test-suite)
-8. [API Reference, Security & Execution Traces](#8-api-reference-security--execution-traces)
+8. [API Reference & Execution Traces](#8-api-reference--execution-traces)
    - [Security & Distributed Tracing](#84-security-authentication--distributed-tracing)
 9. [Master Documentation Index](#9-master-documentation-index)
 10. [Quickstart & Verification Guide](#10-quickstart--verification-guide)
@@ -78,8 +78,8 @@ The master verification dashboard provides an end-to-end audit of test suites, c
 | **Mathematical Drift** | **0.00 USD** | Continuous ledger auditor confirms strict zero-sum conservation post-torture |
 | **Coffman Deadlocks** | **0 Deadlocks** | Monotonic canonical lock ordering eliminates circular wait entirely |
 | **Transactional Outbox** | **100% Atomic** | Transfer mutations and outbox events commit in 1 PostgreSQL transaction (0 ghost events) |
-| **Consumer Deduplication** | **Exactly-Once** | `consumer_processed_events` suppresses duplicate broker deliveries; routes poison pills to DLQ |
-| **Provider Reconciliation**| **Zero Duplicate Debits** | Network timeouts enter `PENDING_RECONCILIATION`; resolved safely via background status queries |
+| **Consumer Deduplication** | **At-Least-Once Broker / Exactly-Once Effects** | At-least-once broker delivery with `consumer_processed_events` suppression; partner idempotency ensures exactly-once external effects |
+| **Provider Reconciliation**| **Zero Duplicate Debits** | Network timeouts enter `PENDING_RECONCILIATION`; resolved safely via background status queries with partner idempotency |
 
 ---
 
@@ -250,7 +250,7 @@ sequenceDiagram
         Broker->>Consumer: Deliver Event Envelope
         Consumer->>DB: Check consumer_processed_events
         alt New Event
-            Consumer->>Webhook: Deliver Webhook / External Payout
+            Consumer->>Webhook: Deliver Webhook / External Payout (Partner Idempotency-Key)
             Consumer->>DB: Insert consumer_processed_events (Status: PROCESSED)
             Consumer-->>Broker: ACK Message
         else Duplicate Redelivery
@@ -258,6 +258,8 @@ sequenceDiagram
         end
     end
 ```
+
+> **Note on External Payout Idempotency**: Asynchronous delivery guarantees *at-least-once* messaging. In the event of a consumer crash between external payout invocation and DB commit of `consumer_processed_events`, re-delivery will occur. Downstream partner APIs must support deterministic `Idempotency-Key` headers (derived from the original transaction ID/event ID) to guarantee exactly-once processing semantics at the external boundary.
 
 ---
 
@@ -271,7 +273,7 @@ sequenceDiagram
 | **DBMS: Deadlock Elimination** | Monotonic Canonical Ordering | $\mathcal{O}(1)$ Key Sort | Sorts account IDs ($\min(A,B) \rightarrow \max(A,B)$); mathematically breaks Coffman circular wait. |
 | **Distributed Systems: Outbox** | Transactional Outbox | $\mathcal{O}(1)$ Insert | Commits domain mutations and event intent in 1 DB transaction; eliminates dual-write failures. |
 | **DBMS: Non-Blocking Polling** | `SELECT ... FOR UPDATE SKIP LOCKED` | $\mathcal{O}(B)$ Batch | Lock-free batch claims across multiple relay worker instances without thread contention. |
-| **Distributed Messaging: Dedup**| Consumer Idempotency Log | $\mathcal{O}(1)$ Lookup | `consumer_processed_events` table converts at-least-once broker delivery into exactly-once effects. |
+| **Distributed Messaging: Dedup**| Consumer Idempotency Log | $\mathcal{O}(1)$ Lookup | `consumer_processed_events` table converts at-least-once broker delivery into exactly-once external effects when combined with partner-side idempotency. |
 | **Fault Tolerance: Quarantine** | Dead-Letter Queue (DLQ) | Bounded Retry | Routes repeatedly failing poison-pill messages to DLQ after exponential backoff retries. |
 | **Resilience: Unknown Recovery**| Provider State Reconciliation | Idempotency Query | Maps external calls to `PENDING_RECONCILIATION` on network timeout; resolves state via background query. |
 | **OS: Multithreading** | OS Worker Pool | $\mathcal{O}(1)$ Wakeup | Worker pool synchronized via `threading.Condition` variables; zero CPU spin-locks. |
@@ -403,7 +405,7 @@ curl -X POST http://localhost:8000/api/v1/transfers \
   -H "Content-Type: application/json" \
   -H "X-API-Key: sk_live_merchant_alpha" \
   -H "X-Correlation-ID: cid_trace_8899aabbcc" \
-  -H "Idempotency-Key: e1a4-4740-8b46-399734c76b0c" \
+  -H "Idempotency-Key: e1a49f7b-4740-4b46-8b46-399734c76b0c" \
   -d '{
     "from_account_id": "ACC-ALICE-001",
     "to_account_id": "ACC-BOB-002",
