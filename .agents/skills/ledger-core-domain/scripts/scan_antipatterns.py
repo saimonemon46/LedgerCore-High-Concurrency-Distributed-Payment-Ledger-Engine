@@ -369,12 +369,17 @@ class CodebaseScanner:
 
         def _check_orm_declaration(stmt_lines: list[str], start_line: int) -> None:
             full_stmt = " ".join(stmt_lines)
-            orm_float_pattern = r"(?:Mapped\s*\[[^\]]*\bfloat\b[^\]]*\]|\b(?:Column|mapped_column)\s*\([^)]*\b(?:sa\.)?Float\b|\bFloatField\b|\bsa\.Float\b)"
+            orm_float_pattern = (
+                r"(?:Mapped\s*\[[^\]]*\bfloat\b[^\]]*\]|"
+                r"\b(?:Column|mapped_column)\s*\([^)]*\b(?:sa\.)?Float\b|"
+                r"\bFloatField\b|\bsa\.Float\b)"
+            )
             if re.search(orm_float_pattern, full_stmt):
                 m_field = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)", full_stmt)
                 field_name = m_field.group(1) if m_field else ""
+                tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", full_stmt)
                 is_curr = is_currency_name(field_name) if field_name else any(
-                    is_currency_name(tok) for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", full_stmt)
+                    is_currency_name(tok) for tok in tokens
                 )
                 if is_curr:
                     self.findings.append(
@@ -472,7 +477,6 @@ class CodebaseScanner:
             stripped = line.strip()
             if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
                 continue
-            lower = line.lower()
             if line_has_currency_identifier(line):
                 if re.search(r":\s*number\b", line):
                     self.findings.append(
@@ -512,7 +516,6 @@ class CodebaseScanner:
             stripped = line.strip()
             if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
                 continue
-            lower = line.lower()
             if line_has_currency_identifier(line):
                 if re.search(r"\b(float32|float64)\b", line):
                     self.findings.append(
@@ -621,7 +624,11 @@ def main() -> None:
 
         if not findings:
             if scanner.skipped_files:
-                print(f"⚠️  0 anti-patterns detected, but {len(scanner.skipped_files)} file(s) were skipped due to errors:")
+                num_skipped = len(scanner.skipped_files)
+                print(
+                    f"⚠️  0 anti-patterns detected, but {num_skipped} file(s) "
+                    "were skipped due to errors:"
+                )
                 for sf, reason in scanner.skipped_files:
                     print(f"  - {sf}: {reason}")
                 sys.exit(1)
