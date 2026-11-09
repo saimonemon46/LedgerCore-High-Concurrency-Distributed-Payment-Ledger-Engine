@@ -125,6 +125,11 @@ class TransferEngine:
                 sm.transition_to("COMMITTED")
                 sm.transition_to("SETTLED")
 
+                fee_acc_id = (
+                    fee_account.account_id
+                    if fee_account and actual_fee.is_positive()
+                    else None
+                )
                 transaction = Transaction(
                     transaction_id=tx_id,
                     from_account_id=from_account.account_id,
@@ -132,7 +137,7 @@ class TransferEngine:
                     amount=amount,
                     fee=actual_fee,
                     status=sm.current_state.value,
-                    fee_account_id=fee_account.account_id if fee_account and actual_fee.is_positive() else None,
+                    fee_account_id=fee_acc_id,
                     currency=amount.currency,
                     idempotency_key=idempotency_key,
                     entries=entries,
