@@ -169,6 +169,22 @@ class PostgresLedgerRepository:
         models = result.scalars().all()
         return [self._to_domain(m) for m in models]
 
+    async def get_entries_for_transaction(self, transaction_id: str) -> list[LedgerEntryModel]:
+        """Returns all raw journal entry models for a transaction."""
+        stmt = (
+            select(LedgerEntryModel)
+            .where(LedgerEntryModel.transaction_id == transaction_id)
+            .order_by(LedgerEntryModel.sequence_id.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_all_entries_models(self, limit: int = 100) -> list[LedgerEntryModel]:
+        """Returns latest raw ledger entry models ordered by sequence ID."""
+        stmt = select(LedgerEntryModel).order_by(LedgerEntryModel.sequence_id.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_total_system_net(self) -> Decimal:
         """Calculates total net sum across all ledger entries in the database."""
         stmt = select(func.coalesce(func.sum(LedgerEntryModel.amount), Decimal("0.0000")))

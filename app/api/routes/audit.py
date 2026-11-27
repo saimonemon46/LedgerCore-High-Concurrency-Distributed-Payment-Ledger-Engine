@@ -49,3 +49,15 @@ async def reconcile_ledger(
         ],
         timestamp=report.timestamp,
     )
+
+
+@router.post(
+    "/seed-demo",
+    status_code=status.HTTP_200_OK,
+    summary="Reset and reseed demo workspace accounts in PostgreSQL",
+)
+async def seed_demo() -> dict[str, str]:
+    """Resets and reseeds demo accounts and balanced double-entry postings in PostgreSQL."""
+    from scripts.seed_demo_data import seed
+    await seed()
+    return {"status": "ok", "message": "Demo data seeded successfully in PostgreSQL"}

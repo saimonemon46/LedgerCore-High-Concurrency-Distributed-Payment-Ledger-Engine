@@ -88,6 +88,36 @@ class TransferResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class LedgerEntryResponse(BaseModel):
+    """Schema for individual ledger journal entries."""
+
+    id: str
+    transaction_id: str
+    account_id: str
+    amount: str
+    currency: str
+    balance_after: str
+    entry_type: str
+    sequence_id: int
+    created_at: str
+
+
+class TransactionDetailResponse(BaseModel):
+    """Schema for detailed transaction queries."""
+
+    id: str
+    tenant_id: str
+    idempotency_key: str | None = None
+    source_account_id: str
+    destination_account_id: str
+    amount: str
+    fee: str
+    currency: str
+    status: str
+    created_at: str
+    postings: list[LedgerEntryResponse] = Field(default_factory=list)
+
+
 class AccountDiscrepancySchema(BaseModel):
     """Schema for individual account discrepancies found during reconciliation."""
 

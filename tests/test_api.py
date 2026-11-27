@@ -111,6 +111,24 @@ class TestAccountsEndpoints:
         assert res.status_code == 404
         assert res.json()["error_type"] == "AccountNotFound"
 
+    def test_list_and_get_accounts(self, client: TestClient) -> None:
+        client.post(
+            "/api/v1/accounts",
+            json={
+                "account_id": "ACC-LST-1",
+                "owner_name": "List User",
+                "initial_balance": "100.00",
+            },
+        )
+        res = client.get("/api/v1/accounts")
+        assert res.status_code == 200
+        accounts = res.json()
+        assert any(a["account_id"] == "ACC-LST-1" for a in accounts)
+
+        detail_res = client.get("/api/v1/accounts/ACC-LST-1")
+        assert detail_res.status_code == 200
+        assert detail_res.json()["account_id"] == "ACC-LST-1"
+
 
 class TestTransfersEndpoint:
     """Verifies atomic transfers, idempotency guarantees, and error handling."""
@@ -413,3 +431,42 @@ class TestAuditEndpoint:
         assert data["is_system_net_zero"] is True
         assert Decimal(data["total_system_net"]) == Decimal("0.00")
         assert len(data["discrepancies"]) == 0
+
+
+class TestLedgerAndTransferQueryEndpoints:
+    """Verifies listing transfers and immutable ledger entries."""
+
+    def test_list_transfers_and_ledger_entries(self, client: TestClient) -> None:
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-QRY-1", "owner_name": "Q1", "initial_balance": "200.00"},
+        )
+        client.post(
+            "/api/v1/accounts",
+            json={"account_id": "ACC-QRY-2", "owner_name": "Q2", "initial_balance": "0.00"},
+        )
+        tx_res = client.post(
+            "/api/v1/transfers",
+            json={"from_account_id": "ACC-QRY-1", "to_account_id": "ACC-QRY-2", "amount": "75.00"},
+            headers={"Idempotency-Key": "test-qry-tx-01"},
+        )
+        assert tx_res.status_code == 200
+        tx_id = tx_res.json()["transaction_id"]
+
+        # List transfers
+        txs_res = client.get("/api/v1/transfers")
+        assert txs_res.status_code == 200
+        assert any(t["id"] == tx_id for t in txs_res.json())
+
+        # Get transfer detail
+        detail_res = client.get(f"/api/v1/transfers/{tx_id}")
+        assert detail_res.status_code == 200
+        detail = detail_res.json()
+        assert detail["id"] == tx_id
+        assert len(detail["postings"]) == 2
+
+        # List ledger entries
+        ledger_res = client.get("/api/v1/ledger/entries")
+        assert ledger_res.status_code == 200
+        entries = ledger_res.json()
+        assert any(e["transaction_id"] == tx_id for e in entries)

@@ -93,11 +93,11 @@ async def create_account(
                 await uow.append_entries([credit_entry, debit_entry], currency=str(currency))
 
             await uow.commit()
-    except IntegrityError:
+    except IntegrityError as err:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Account with ID '{request.account_id}' already exists.",
-        )
+        ) from err
 
     return AccountResponse(
         account_id=account.account_id,
@@ -108,6 +108,59 @@ async def create_account(
         is_active=account.is_active(),
         cached=False,
     )
+
+
+@router.get(
+    "",
+    response_model=list[AccountResponse],
+    summary="List all ledger accounts",
+)
+async def list_accounts(
+    uow: PostgresUnitOfWork = Depends(get_postgres_uow),
+) -> list[AccountResponse]:
+    """Retrieves all accounts directly from the authoritative PostgreSQL database."""
+    async with uow:
+        accs = await uow.accounts.get_all()
+        return [
+            AccountResponse(
+                account_id=a.account_id,
+                owner_name=a.owner_name,
+                balance=str(a.balance.amount),
+                currency=str(a.balance.currency),
+                status=str(a.status),
+                is_active=a.is_active(),
+                cached=False,
+            )
+            for a in accs
+        ]
+
+
+@router.get(
+    "/{account_id}",
+    response_model=AccountResponse,
+    summary="Get account by ID",
+)
+async def get_account(
+    account_id: str,
+    uow: PostgresUnitOfWork = Depends(get_postgres_uow),
+) -> AccountResponse:
+    """Retrieves an account profile directly from PostgreSQL."""
+    async with uow:
+        a = await uow.accounts.get_by_id(account_id)
+        if a is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Account with ID '{account_id}' not found.",
+            )
+        return AccountResponse(
+            account_id=a.account_id,
+            owner_name=a.owner_name,
+            balance=str(a.balance.amount),
+            currency=str(a.balance.currency),
+            status=str(a.status),
+            is_active=a.is_active(),
+            cached=False,
+        )
 
 
 @router.get(
