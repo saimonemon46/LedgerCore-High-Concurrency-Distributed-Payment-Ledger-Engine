@@ -57,4 +57,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-ENTRYPOINT ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["sh", "-c", "exec gunicorn -w ${WEB_CONCURRENCY:-$(nproc)} -k uvicorn.workers.UvicornWorker app.api.main:app --bind 0.0.0.0:8000 --access-logfile -"]

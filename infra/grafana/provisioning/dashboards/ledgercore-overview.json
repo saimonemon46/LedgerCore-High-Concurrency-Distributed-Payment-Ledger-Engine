@@ -1,0 +1,51 @@
+{
+  "title": "LedgerCore — Distributed Financial Engine",
+  "uid": "ledgercore-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Transfers Settled",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "ledger_transfers_settled_total", "refId": "A" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Transfers Rejected / Failed",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "ledger_transfers_failed_total", "refId": "A" }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Rate Limit Rejections (429)",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "expr": "ledger_rate_limit_rejections_total", "refId": "A" }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Circuit Breaker State (0=CLOSED, 2=OPEN)",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "expr": "ledger_circuit_breaker_state", "refId": "A" }]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "HTTP Requests / sec",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [{ "expr": "sum(rate(ledger_http_requests_total[1m])) by (status)", "refId": "A" }]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "P95 Request Latency (seconds)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(ledger_http_request_duration_seconds_bucket[1m])) by (le))", "refId": "A" }]
+    }
+  ]
+}
