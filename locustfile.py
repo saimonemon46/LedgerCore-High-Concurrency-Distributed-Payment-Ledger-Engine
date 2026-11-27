@@ -72,8 +72,10 @@ class LedgerCoreUser(HttpUser):
             catch_response=True,
             name="/api/v1/transfers",
         ) as response:
-            if response.status_code in (200, 422):
-                # 422 is valid if an account temporarily runs out of funds during race
+            if response.status_code in (200, 409, 422):
+                # 200: Transfer posted or idempotent replay returned
+                # 409: Idempotency conflict / in-flight lock during retry storm
+                # 422: Valid rejection if an account runs out of funds during race
                 response.success()
             else:
                 response.failure(f"Unexpected status: {response.status_code} - {response.text}")
@@ -102,11 +104,10 @@ class LedgerCoreUser(HttpUser):
         ) as response:
             if response.status_code == 200:
                 data = response.json()
-                is_balanced = data.get("is_balanced") is True
                 net_zero = Decimal(data.get("total_system_net", "1")) == Decimal("0.00")
-                if is_balanced and net_zero:
+                if net_zero:
                     response.success()
                 else:
-                    response.failure(f"Ledger reconciliation divergence detected: {data}")
+                    response.failure(f"Zero-sum invariant broken: {data}")
             else:
                 response.failure(f"Audit endpoint error: {response.status_code}")

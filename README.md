@@ -17,8 +17,30 @@
 
 > **Architect & Author:** Md. Sai Mon Hasan Emon (Backend & Systems Engineer)  
 > **Target Alignment:** Core Banking Systems, Payment Gateways, High-Throughput Fintech Platforms (bKash, Pathao Pay, Stripe)  
-> **Tech Stack:** Python 3.12+, FastAPI, PostgreSQL, Redis, RabbitMQ, Docker & Compose, PyTest, Locust, Ruff, Mypy  
+> **Tech Stack:** Python 3.12+, FastAPI, Gunicorn + Uvicorn, PostgreSQL, Redis, RabbitMQ, Nginx, Prometheus, Grafana, Next.js  
 > **Architecture:** Clean / Hexagonal Architecture (Ports & Adapters) + Transactional Outbox + Durable Messaging  
+
+---
+
+## 🌐 Live Demo, Observability & 90-Sec Walkthrough
+
+- **Live API & Swagger Docs:** `https://<your-vps-domain>/docs` *(deploy via `docker compose up -d`)*
+- **Live Command Center UI:** `https://<your-vps-domain>:3000/console`
+- **Grafana Live / Snapshot:** `https://<your-vps-domain>:3001/d/ledgercore-overview`
+- **90-Second Demo Video:** [Watch Walkthrough](demovideo/) *(record 50-concurrent-transfer burst + Grafana + Zero-Drift audit)*
+
+### System Architecture
+
+```mermaid
+flowchart LR
+    UI["Next.js Command Center UI"] -->|"HTTP / JSON"| NGINX["Nginx Reverse Proxy (:80)"]
+    NGINX -->|"Proxy Pass"| API["LedgerCore API (Gunicorn + Uvicorn Workers)"]
+    API -->|"Rate Limit (429) & Cache"| REDIS["Redis 7"]
+    API -->|"ACID + Row Locks + Outbox"| PG["PostgreSQL 16 (Internal)"]
+    API -->|"/metrics"| PROM["Prometheus"]
+    PROM --> GRAF["Grafana Dashboard (:3001)"]
+    PG -->|"SKIP LOCKED Relay"| RMQ["RabbitMQ Broker"]
+```
 
 ---
 

@@ -198,6 +198,22 @@ class PostgresUnitOfWork:
         await self.session.flush()
         return tx_model
 
+    async def get_transactions(self, limit: int = 50) -> list[TransactionModel]:
+        """Queries recent transactions ordered by creation timestamp."""
+        if self.session is None:
+            raise RuntimeError("Unit of Work is not active.")
+        stmt = select(TransactionModel).order_by(TransactionModel.created_at.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_transaction_by_id(self, tx_id: str) -> TransactionModel | None:
+        """Retrieves a single transaction by ID."""
+        if self.session is None:
+            raise RuntimeError("Unit of Work is not active.")
+        stmt = select(TransactionModel).where(TransactionModel.id == tx_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def save_account_mutation(self, account: Account) -> None:
         """Updates the balance and status of an existing locked account."""
         if self.session is None:

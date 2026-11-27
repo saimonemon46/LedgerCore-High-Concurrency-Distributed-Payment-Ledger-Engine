@@ -1,15 +1,17 @@
 """FastAPI Application factory and exception handlers for LedgerCore."""
 
 import logging
-from collections.abc import AsyncGenerator
+import time
+import uuid
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_container
-from app.api.routes import accounts, audit, health, transfers
+from app.api.routes import accounts, audit, health, ledger, transfers
 from app.application.exceptions import (
     AccountNotFoundError,
     IdempotencyConflictError,
@@ -27,6 +29,10 @@ from app.domain.exceptions import (
     DomainError,
     InsufficientFundsError,
     LedgerInvariantViolationError,
+)
+from app.infrastructure.observability.metrics import (
+    metrics,
+    render_prometheus_metrics,
 )
 from app.infrastructure.persistence.postgres.database import (
     check_db_health,
@@ -55,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down LedgerCore API services and draining workers...")
+    await container.rate_limiter.close()
     if container.worker_pool.is_running:
         container.worker_pool.shutdown(wait=True)
     if container._db_engine is not None:
@@ -80,7 +87,27 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
     )
+
+    @app.middleware("http")
+    async def observability_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        request_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:12]}"
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration = time.perf_counter() - start
+        if request.url.path != "/metrics":
+            metrics.record_http_request(
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_seconds=duration,
+            )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
     # Global Exception Handlers
     @app.exception_handler(AccountNotFoundError)
@@ -270,10 +297,17 @@ def create_app() -> FastAPI:
             "health_url": "/api/v1/health",
         }
 
+    # Prometheus /metrics endpoint
+    @app.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics() -> Response:
+        payload, content_type = render_prometheus_metrics()
+        return Response(content=payload, media_type=content_type)
+
     # Route Registration
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(accounts.router, prefix="/api/v1")
     app.include_router(transfers.router, prefix="/api/v1")
+    app.include_router(ledger.router, prefix="/api/v1")
     app.include_router(audit.router, prefix="/api/v1")
 
     return app

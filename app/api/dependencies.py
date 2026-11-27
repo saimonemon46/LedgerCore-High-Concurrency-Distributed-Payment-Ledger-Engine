@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+from fastapi import HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.application.use_cases.audit_reconciliation import AuditReconciliationUseCase
@@ -18,7 +19,9 @@ from app.application.use_cases.query_balance import (
     QueryBalanceUseCase,
 )
 from app.infrastructure.concurrency.lock_manager import CanonicalLockManager
+from app.infrastructure.config import get_settings
 from app.infrastructure.dsa.lru_ttl_cache import LRUTTLCache
+from app.infrastructure.observability.metrics import metrics
 from app.infrastructure.os_threading.worker_pool import ThreadSafeWorkerPool
 from app.infrastructure.persistence.memory_repositories import (
     InMemoryAccountRepository,
@@ -31,6 +34,7 @@ from app.infrastructure.persistence.postgres.database import (
 )
 from app.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 from app.infrastructure.resilience.circuit_breaker import CircuitBreaker
+from app.infrastructure.resilience.rate_limiter import RedisRateLimiter
 from app.ports.cache_port import ICachePort
 from app.ports.event_publisher_port import IEventPublisher, TransactionSettledEvent
 from app.ports.idempotency_port import IIdempotencyStore
@@ -73,8 +77,8 @@ class Container:
         self.lock_manager: CanonicalLockManager = CanonicalLockManager()
         self.circuit_breaker: CircuitBreaker = CircuitBreaker(
             name="api_storage_breaker",
-            failure_threshold_rate=0.5,
-            min_requests=5,
+            failure_threshold_rate=0.6,
+            min_requests=20,
             recovery_timeout_seconds=5.0,
         )
         self.worker_pool: ThreadSafeWorkerPool = ThreadSafeWorkerPool(
@@ -83,6 +87,11 @@ class Container:
         )
         self.worker_pool.start()
         self.event_publisher: IEventPublisher = WorkerPoolEventPublisher(self.worker_pool)
+        settings = get_settings()
+        self.rate_limiter: RedisRateLimiter = RedisRateLimiter(
+            redis_url=settings.redis_url,
+            requests_per_minute=settings.rate_limit_transfers_per_minute,
+        )
         self._db_engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
 
@@ -218,3 +227,28 @@ def get_query_balance_use_case() -> QueryBalanceUseCase:
         cache=c.cache,
         ttl_seconds=60.0,
     )
+
+
+async def enforce_transfer_rate_limit(request: Request, response: Response) -> None:
+    """Enforces Redis-backed per-client rate limiting on transfer creation."""
+    client_host = request.client.host if request.client else "unknown"
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    client_key = forwarded_for.split(",")[0].strip() if forwarded_for else client_host
+
+    result = await get_container().rate_limiter.check(client_key, scope="transfers")
+    response.headers["X-RateLimit-Limit"] = str(result.limit)
+    response.headers["X-RateLimit-Remaining"] = str(result.remaining)
+    if not result.allowed:
+        metrics.inc_rate_limit_rejection()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Rate limit exceeded ({result.limit} transfers/min). "
+                f"Retry in {result.reset_seconds}s."
+            ),
+            headers={
+                "Retry-After": str(result.reset_seconds),
+                "X-RateLimit-Limit": str(result.limit),
+                "X-RateLimit-Remaining": "0",
+            },
+        )

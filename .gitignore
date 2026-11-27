@@ -68,3 +68,13 @@ flow.md
 # Generated reports & benchmarks
 screenshots/*.html
 reports/
+
+# Media and demo recordings
+demovideo/
+*.mp4
+
+# Frontend build & dependencies
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+

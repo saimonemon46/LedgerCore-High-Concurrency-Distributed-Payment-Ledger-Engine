@@ -56,6 +56,11 @@ class Settings:
     db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     db_pool_timeout: float = float(os.getenv("DB_POOL_TIMEOUT", "30.0"))
 
+    # Rate Limiting
+    rate_limit_transfers_per_minute: int = int(
+        os.getenv("RATE_LIMIT_TRANSFERS_PER_MINUTE", "300")
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
