@@ -2,12 +2,14 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ShieldCheck, RefreshCw, Activity, Database, Check } from 'lucide-react';
+import { RefreshCw, Check, Compass } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useDemoGuide } from '@/components/layout/DemoGuideContext';
 
 export function Topbar() {
   const [resetting, setResetting] = useState(false);
   const [resetDone, setResetDone] = useState(false);
+  const { demoGuide, toggleDemoGuide } = useDemoGuide();
 
   const handleResetDemo = () => {
     setResetting(true);
@@ -57,6 +59,20 @@ export function Topbar() {
             <span className="text-slate-600">|</span>
             <span className="text-emerald-400">0 Outbox Lag</span>
           </div>
+
+          <button
+            onClick={toggleDemoGuide}
+            aria-pressed={demoGuide}
+            className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition ${
+              demoGuide
+                ? 'bg-indigo-600/25 hover:bg-indigo-600/35 text-indigo-300 border-indigo-500/50'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+            }`}
+            title="Toggle step-by-step recruiter & video demo callouts"
+          >
+            <Compass className={`w-3.5 h-3.5 ${demoGuide ? 'text-indigo-400' : 'text-slate-400'}`} />
+            <span>Demo Guide: {demoGuide ? 'ON' : 'OFF'}</span>
+          </button>
 
           <button
             onClick={handleResetDemo}
