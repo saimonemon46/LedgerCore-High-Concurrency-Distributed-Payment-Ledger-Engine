@@ -20,20 +20,17 @@ const INITIAL_TELEMETRY: TelemetrySummary = {
   timestamp: 0,
 };
 
+function formatHHMMSS(date: Date): string {
+  return date.toTimeString().slice(0, 8);
+}
+
 export default function DashboardPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [telemetry, setTelemetry] = useState<TelemetrySummary>(INITIAL_TELEMETRY);
   const [driftAmount, setDriftAmount] = useState<string>('0.00');
   const [isAuditing, setIsAuditing] = useState<boolean>(false);
-  const [chartSeries, setChartSeries] = useState<ThroughputPoint[]>(() =>
-    Array.from({ length: 12 }, (_, idx) => ({
-      label: `${idx}`,
-      rps: 2.5 + (idx % 3) * 1.2,
-      success: 3 + (idx % 4),
-      rejected: 0,
-    })),
-  );
+  const [chartSeries, setChartSeries] = useState<ThroughputPoint[]>([]);
 
   const refreshData = useCallback(async () => {
     const [accs, txs, tel] = await Promise.all([
@@ -47,6 +44,19 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    const now = Date.now();
+    setChartSeries(
+      Array.from({ length: 12 }, (_, idx) => ({
+        label: formatHHMMSS(new Date(now - (11 - idx) * 3000)),
+        rps: 2.5 + (idx % 3) * 1.2,
+        avgLatencyMs: 8.4 + (idx % 4) * 1.5,
+        settled: 3 + (idx % 4),
+        insufficientFunds: 0,
+        rateLimited: 0,
+        circuitOpen: 0,
+      })),
+    );
+
     refreshData();
     const interval = setInterval(async () => {
       const tel = await api.getTelemetrySummary();
@@ -54,10 +64,13 @@ export default function DashboardPage() {
       setChartSeries((prev) => [
         ...prev.slice(-19),
         {
-          label: new Date().toLocaleTimeString(),
+          label: formatHHMMSS(new Date()),
           rps: tel.rps,
-          success: 0,
-          rejected: 0,
+          avgLatencyMs: tel.p95_latency_ms,
+          settled: 0,
+          insufficientFunds: 0,
+          rateLimited: 0,
+          circuitOpen: 0,
         },
       ]);
     }, 3000);
@@ -75,18 +88,40 @@ export default function DashboardPage() {
   };
 
   const handleSimulationComplete = async (results: TransferAttemptResult[]) => {
-    const settled = results.filter((r) => r.outcome === 'SETTLED' || r.outcome === 'REPLAYED').length;
-    const rejected = results.length - settled;
+    const settled = results.filter(
+      (r) => r.outcome === 'SETTLED' || r.outcome === 'REPLAYED',
+    ).length;
+    const rateLimited = results.filter(
+      (r) => r.outcome === 'RATE_LIMITED' || r.status === 429,
+    ).length;
+    const circuitOpen = results.filter(
+      (r) => r.outcome === 'CIRCUIT_OPEN' || r.status === 503,
+    ).length;
+    const insufficientFunds = results.filter(
+      (r) =>
+        r.outcome === 'INSUFFICIENT_FUNDS' ||
+        r.status === 422 ||
+        r.status === 409 ||
+        (r.outcome === 'ERROR' && r.status !== 429 && r.status !== 503),
+    ).length;
+
     const totalMs = Math.max(10, results.reduce((s, r) => s + r.latencyMs, 0));
-    const burstRps = Math.round(((results.length / totalMs) * 1000) * 10) / 10;
+    const avgLatencyMs =
+      results.length > 0
+        ? Math.round((results.reduce((s, r) => s + r.latencyMs, 0) / results.length) * 10) / 10
+        : 0;
+    const burstRps = Math.round((results.length / totalMs) * 1000 * 10) / 10;
 
     setChartSeries((prev) => [
       ...prev.slice(-19),
       {
-        label: 'Burst',
+        label: formatHHMMSS(new Date()),
         rps: burstRps,
-        success: settled,
-        rejected,
+        avgLatencyMs,
+        settled,
+        insufficientFunds,
+        rateLimited,
+        circuitOpen,
       },
     ]);
     await refreshData();
