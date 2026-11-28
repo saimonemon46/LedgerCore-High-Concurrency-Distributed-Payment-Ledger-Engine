@@ -116,9 +116,9 @@ export default function DashboardPage() {
         onCircuitStateChange={handleCircuitStateChange}
       />
 
-      <LedgerAccountExplorer accounts={accounts} transactions={transactions} />
-
       <ThroughputChart series={chartSeries} />
+
+      <LedgerAccountExplorer accounts={accounts} transactions={transactions} />
     </div>
   );
 }
