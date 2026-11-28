@@ -83,7 +83,9 @@ export function Sidebar() {
 
       <div className="p-4 border-t border-slate-800 bg-slate-900/90 text-xs text-slate-400">
         <p className="font-semibold text-emerald-400">Financial Invariant Guard</p>
-        <p className="mt-0.5 text-[11px] text-slate-500">Strict Double-Entry Zero Drift</p>
+        <p className="mt-1 text-[11px] leading-snug text-slate-400">
+          Ensures every debit equals credit + fee — zero money lost or created (৳0.00 drift).
+        </p>
       </div>
     </aside>
   );
