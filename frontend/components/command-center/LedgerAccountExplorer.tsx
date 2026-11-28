@@ -4,6 +4,7 @@ import React from 'react';
 import { Wallet, BookOpen, Lock, CheckCircle2 } from 'lucide-react';
 import { Account, Transaction } from '@/types/api';
 import { formatMoney } from '@/lib/format-money';
+import { useDemoGuide } from '@/components/layout/DemoGuideContext';
 
 interface LedgerAccountExplorerProps {
   accounts: Account[];
@@ -14,8 +15,22 @@ export function LedgerAccountExplorer({
   accounts,
   transactions,
 }: LedgerAccountExplorerProps) {
+  const { demoGuide } = useDemoGuide();
+
   return (
-    <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <section className="space-y-4">
+      {demoGuide && (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs">
+          <span className="font-mono font-bold text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded">
+            Step 4: Inspect Ledger
+          </span>
+          <span className="text-slate-300">
+            Verify updated account balances and immutable debit/credit/fee journal rows.
+          </span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
       {/* Left: Accounts Panel (4 cols) */}
       <div className="lg:col-span-4 bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
@@ -135,6 +150,7 @@ export function LedgerAccountExplorer({
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     </section>
   );

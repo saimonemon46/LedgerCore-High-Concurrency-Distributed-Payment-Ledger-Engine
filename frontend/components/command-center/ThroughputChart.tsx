@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { BarChart3 } from 'lucide-react';
+import { useDemoGuide } from '@/components/layout/DemoGuideContext';
 
 export interface ThroughputPoint {
   label: string;
@@ -15,6 +16,7 @@ interface ThroughputChartProps {
 }
 
 export function ThroughputChart({ series }: ThroughputChartProps) {
+  const { demoGuide } = useDemoGuide();
   const maxRps = Math.max(10, ...series.map((p) => p.rps));
   const maxCount = Math.max(5, ...series.map((p) => p.success + p.rejected));
 
@@ -35,6 +37,17 @@ export function ThroughputChart({ series }: ThroughputChartProps) {
 
   return (
     <section className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-4">
+      {demoGuide && (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs">
+          <span className="font-mono font-bold text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded">
+            Step 3: View Telemetry
+          </span>
+          <span className="text-slate-300">
+            Watch real-time RPS spikes alongside settled vs. rejected request counts.
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
           <h2 className="text-sm font-bold text-white flex items-center gap-2">

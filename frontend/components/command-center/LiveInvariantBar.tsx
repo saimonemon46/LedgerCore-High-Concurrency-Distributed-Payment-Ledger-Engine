@@ -3,6 +3,7 @@
 import React from 'react';
 import { ShieldCheck, Activity, Zap, Clock, Layers, RefreshCw } from 'lucide-react';
 import { TelemetrySummary } from '@/types/api';
+import { useDemoGuide } from '@/components/layout/DemoGuideContext';
 
 interface LiveInvariantBarProps {
   telemetry: TelemetrySummary;
@@ -17,6 +18,7 @@ export function LiveInvariantBar({
   isAuditing,
   onRunAudit,
 }: LiveInvariantBarProps) {
+  const { demoGuide } = useDemoGuide();
   const isZeroDrift = parseFloat(driftAmount) === 0;
   const breakerColor =
     telemetry.circuit_breaker_state === 'CLOSED'
@@ -27,6 +29,17 @@ export function LiveInvariantBar({
 
   return (
     <section className="space-y-4">
+      {demoGuide && (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs">
+          <span className="font-mono font-bold text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded">
+            Step 1: Verify Invariant
+          </span>
+          <span className="text-slate-300">
+            Confirm ∑ Debits == ∑ Credits (৳0.00 drift) before running load.
+          </span>
+        </div>
+      )}
+
       {/* Balance Conservation Banner */}
       <div
         className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 transition ${
@@ -60,6 +73,9 @@ export function LiveInvariantBar({
               <span className={isZeroDrift ? 'text-emerald-400' : 'text-rose-400'}>
                 Drift: ৳{driftAmount}
               </span>
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              Ensures every debit equals credit + fee — zero money lost or created (৳0.00 drift).
             </p>
           </div>
         </div>

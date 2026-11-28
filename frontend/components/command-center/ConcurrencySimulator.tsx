@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Flame, Repeat, ShieldAlert, RotateCcw, CheckCircle2, XCircle, Loader2, Terminal, Trash2 } from 'lucide-react';
 import { Account, TransferAttemptResult } from '@/types/api';
 import { api } from '@/lib/api';
+import { useDemoGuide } from '@/components/layout/DemoGuideContext';
 
 interface TerminalLine {
   id: string;
@@ -83,6 +84,7 @@ export function ConcurrencySimulator({
   onSimulationComplete,
   onCircuitStateChange,
 }: ConcurrencySimulatorProps) {
+  const { demoGuide } = useDemoGuide();
   const [runningMode, setRunningMode] = useState<'concurrent' | 'idempotency' | 'chaos' | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<TerminalLine[]>([
     {
@@ -354,6 +356,17 @@ export function ConcurrencySimulator({
 
   return (
     <section className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-4">
+      {demoGuide && (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs">
+          <span className="font-mono font-bold text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded">
+            Step 2: Run Stress Test
+          </span>
+          <span className="text-slate-300">
+            Fire 100 concurrent transfers, test idempotency, or trip the circuit breaker.
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
           <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -367,50 +380,74 @@ export function ConcurrencySimulator({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <button
-          onClick={handleConcurrentBurst}
-          disabled={runningMode !== null}
-          className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold transition shadow-sm"
-        >
-          {runningMode === 'concurrent' ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Flame className="w-4 h-4" />
-          )}
-          Simulate 100 Concurrent Transfers
-        </button>
+        <div className="flex flex-col gap-1.5">
+          <button
+            onClick={handleConcurrentBurst}
+            disabled={runningMode !== null}
+            className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold transition shadow-sm"
+          >
+            {runningMode === 'concurrent' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Flame className="w-4 h-4" />
+            )}
+            Simulate 100 Concurrent Transfers
+          </button>
+          <p className="text-[11px] font-mono text-indigo-300/90 px-0.5">
+            Expected: 200 Settled + 422/429 Safe Rejects (৳0.00 Drift)
+          </p>
+          <p className="text-[11px] text-slate-400 leading-snug px-0.5">
+            Tests PostgreSQL row-level locking (SELECT FOR UPDATE) against race conditions and double-spending.
+          </p>
+        </div>
 
-        <button
-          onClick={handleIdempotencyReplay}
-          disabled={runningMode !== null}
-          className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-100 border border-slate-700 text-xs sm:text-sm font-semibold transition"
-        >
-          {runningMode === 'idempotency' ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Repeat className="w-4 h-4 text-cyan-400" />
-          )}
-          Test Idempotency Replay (3x)
-        </button>
+        <div className="flex flex-col gap-1.5">
+          <button
+            onClick={handleIdempotencyReplay}
+            disabled={runningMode !== null}
+            className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-100 border border-slate-700 text-xs sm:text-sm font-semibold transition"
+          >
+            {runningMode === 'idempotency' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Repeat className="w-4 h-4 text-cyan-400" />
+            )}
+            Test Idempotency Replay (3x)
+          </button>
+          <p className="text-[11px] font-mono text-cyan-300/90 px-0.5">
+            Expected: 1 Debit + 2 Cached Replays
+          </p>
+          <p className="text-[11px] text-slate-400 leading-snug px-0.5">
+            Proves 3 identical retries with the same Idempotency-Key result in only 1 debit.
+          </p>
+        </div>
 
-        <button
-          onClick={handleCircuitBreakerChaos}
-          disabled={runningMode !== null}
-          className={`flex items-center justify-center gap-2 px-4 py-3 rounded-lg border text-xs sm:text-sm font-semibold transition disabled:opacity-50 ${
-            circuitState === 'OPEN'
-              ? 'bg-emerald-600/20 hover:bg-emerald-600/30 border-emerald-500/40 text-emerald-300'
-              : 'bg-rose-600/20 hover:bg-rose-600/30 border-rose-500/40 text-rose-300'
-          }`}
-        >
-          {runningMode === 'chaos' ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : circuitState === 'OPEN' ? (
-            <RotateCcw className="w-4 h-4" />
-          ) : (
-            <ShieldAlert className="w-4 h-4" />
-          )}
-          {circuitState === 'OPEN' ? 'Reset Circuit Breaker' : 'Trigger Circuit Breaker'}
-        </button>
+        <div className="flex flex-col gap-1.5">
+          <button
+            onClick={handleCircuitBreakerChaos}
+            disabled={runningMode !== null}
+            className={`flex items-center justify-center gap-2 px-4 py-3 rounded-lg border text-xs sm:text-sm font-semibold transition disabled:opacity-50 ${
+              circuitState === 'OPEN'
+                ? 'bg-emerald-600/20 hover:bg-emerald-600/30 border-emerald-500/40 text-emerald-300'
+                : 'bg-rose-600/20 hover:bg-rose-600/30 border-rose-500/40 text-rose-300'
+            }`}
+          >
+            {runningMode === 'chaos' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : circuitState === 'OPEN' ? (
+              <RotateCcw className="w-4 h-4" />
+            ) : (
+              <ShieldAlert className="w-4 h-4" />
+            )}
+            {circuitState === 'OPEN' ? 'Reset Circuit Breaker' : 'Trigger Circuit Breaker'}
+          </button>
+          <p className="text-[11px] font-mono text-rose-300/90 px-0.5">
+            Expected: Trips OPEN -&gt; 503 Fail-Fast
+          </p>
+          <p className="text-[11px] text-slate-400 leading-snug px-0.5">
+            Simulates downstream outage — trips OPEN to fail-fast (HTTP 503) instead of hanging workers.
+          </p>
+        </div>
       </div>
 
       {lastSummary && (
