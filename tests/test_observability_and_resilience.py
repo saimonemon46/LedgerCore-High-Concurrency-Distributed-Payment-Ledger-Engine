@@ -1,5 +1,7 @@
 """Unit and API tests for Prometheus metrics, telemetry summary, chaos breaker, and rate limiter."""
 
+from collections.abc import Iterator
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,7 +12,7 @@ from app.infrastructure.resilience.rate_limiter import RedisRateLimiter
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client() -> Iterator[TestClient]:
     Container.reset()
     app = create_app()
     with TestClient(app) as test_client:
